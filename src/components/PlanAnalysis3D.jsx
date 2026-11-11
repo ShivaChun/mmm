@@ -907,6 +907,13 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
     // Helper: 取得 site 的 basePoints（相容兩種資料結構）
     const getSiteBasePoints = (site) => site.basePoints || site.baseGeometry?.points || null;
     const getSiteBaseCurves = (site) => site.baseCurves || site.baseGeometry?.curves || null;
+    const getSiteNormalizedData = (site) => {
+        const sPts = getSiteBasePoints(site);
+        const sCurves = getSiteBaseCurves(site);
+        return sPts
+            ? normalizeWithCurves(sPts, sCurves)
+            : { points: getSiteDefaultRect(site), curves: null, centroid: { x: 0, y: 0 } };
+    };
     const getSiteRoads = (site) => {
         const ownRoads = site?.roads ?? site?.inputs?.roads;
         if (Array.isArray(ownRoads)) return ownRoads;
