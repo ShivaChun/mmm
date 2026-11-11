@@ -1,0 +1,158 @@
+Created At: 2026-07-02T16:46:39Z
+Completed At: 2026-07-02T16:46:40Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 854
+Total Bytes: 72502
+Showing lines 1 to 150
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: import React, { useState, useEffect, useCallback } from 'react';
+2: import { Building2, MapPin, Plus, Trash2, FileText, Layers, ChevronUp, ChevronDown, AlertTriangle, Settings2, Pencil, Box, MapPinned, X } from 'lucide-react';
+3: import { useSiteAnalysis } from './hooks/useSiteAnalysis';
+4: import { useMultiSiteAnalysis } from './hooks/useMultiSiteAnalysis';
+5: import { toPing, formatNum } from './utils/geometry';
+6: import Visualizer3D from './components/PlanAnalysis3D';
+7: import { ContextMenu } from './components/ContextMenu.jsx';
+8: import { CollapsibleSection, InputRow, SectionHeader } from './components/Si.jsx';
+9: 
+10: const DEFAULT_INPUTS = { projectName: '', district: '南投縣中興新村', roads: [{ id: 1, name: '向陽路', width: 10, orientation: 'bottom', type: 'primary', edgeIndex: 2 }], zoneType: '住宅區', urbanPlanName: '中興新村都市計畫區', coverageRatio: 50, floorRatio: 150, excavationRatio: 60, floorsBelow: 1, avgCarArea: 35, frontYardDepth: 4, sideYardDepth: 1.5, sideYardDirection: 'right', backYardDepth: 3, floorHeight1F: 4.2, floorHeightOther: 3.6, baseWidth: '', incentiveArea: 0, transferArea: 0, minBackyardDepthRatio: 0, arcadeDepth: 0, floorsAbove: 4, northAngle: 0 };
+11: const SITE_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+12: const createDefaultSite = (name, id) => ({ id: id || Date.now(), name: name || '基地', lots: [{ id: 1, lot: '___段___地號', area: 239.12 }], inputs: { ...DEFAULT_INPUTS }, overrides: {}, position: { x: 0, y: 0 }, baseGeometry: { points: null, curves: null } });
+13: 
+14: const Cal = () => {
+15:     // ── Multi-Site State ──
+16:     const [sites, setSites] = useState([createDefaultSite('基地 A', 1)]);
+17:     const [activeSiteIndex, setActiveSiteIndex] = useState(0);
+18:     const [showAddSiteDialog, setShowAddSiteDialog] = useState(false);
+19:     const [showCombinedTable, setShowCombinedTable] = useState(true);
+20: 
+21:     // ── Placement Mode State ──
+22:     const [placementMode, setPlacementMode] = useState(false); // false or 'independent'
+23:     const [referenceEdge, setReferenceEdge] = useState(null);
+24:     const [placementOffset, setPlacementOffset] = useState({ x: 0, y: 0 });
+25: 
+26:     // Derived active-site accessors (so all existing handlers keep working)
+27:     const activeSite = sites[activeSiteIndex] || sites[0];
+28:     const lots = activeSite.lots;
+29:     const inputs = activeSite.inputs;
+30:     const overrides = activeSite.overrides;
+31:     const setLots = useCallback((u) => setSites(p => p.map((s, i) => i === activeSiteIndex ? { ...s, lots: typeof u === 'function' ? u(s.lots) : u } : s)), [activeSiteIndex]);
+32:     const setInputs = useCallback((u) => setSites(p => p.map((s, i) => i === activeSiteIndex ? { ...s, inputs: typeof u === 'function' ? u(s.inputs) : u } : s)), [activeSiteIndex]);
+33:     const setOverrides = useCallback((u) => setSites(p => p.map((s, i) => i === activeSiteIndex ? { ...s, overrides: typeof u === 'function' ? u(s.overrides) : u } : s)), [activeSiteIndex]);
+34: 
+35:     // ── Global Params (shared) ──
+36:     const [params, setParams] = useState({ exemptRate: 15, stairRate: 5, balconyRate: 10, pricePerPing: 25 });
+37:     const [isEditMode, setIsEditMode] = useState(false);
+38:     const [unusedArea, setUnusedArea] = useState(0);
+39:     const [showDetail, setShowDetail] = useState(true);
+40:     const [showVisualizer, setShowVisualizer] = useState(true);
+41:     const [showBasePanels, setShowBasePanels] = useState(true);
+42:     const [showCheckLines, setShowCheckLines] = useState(true);
+43:     const [showHeightRatio, setShowHeightRatio] = useState(true);
+44:     const [showWeiLao, setShowWeiLao] = useState(false);
+45:     const [showBackyard, setShowBackyard] = useState(true);
+46:     const [isConstraintMode, setIsConstraintMode] = useState(false);
+47:     const [isDarkMode, setIsDarkMode] = useState(false);
+48: 
+49:     useEffect(() => {
+50:         if (isDarkMode) {
+51:             document.documentElement.classList.add('theme-cyberpunk');
+52:             document.documentElement.classList.remove('theme-neumorphism');
+53:         } else {
+54:             document.documentElement.classList.add('theme-neumorphism');
+55:             document.documentElement.classList.remove('theme-cyberpunk');
+56:         }
+57:     }, [isDarkMode]);
+58: 
+59:     // Removed unused toggleConstraints
+60: 
+61:     const updateLot = (id, field, value) => { setLots(prev => prev.map(l => l.id === id ? { ...l, [field]: field === 'area' ? (parseFloat(value) || 0) : value } : l)); };
+62:     const addLot = () => { const newId = Math.max(...lots.map(l => l.id), 0) + 1; setLots([...lots, { id: newId, lot: '', area: 0 }]); };
+63:     const removeLot = (id) => { if (lots.length > 1) setLots(lots.filter(l => l.id !== id)); };
+64:     const updateRoad = (id, field, value) => { setInputs(prev => ({ ...prev, roads: prev.roads.map(r => r.id === id ? { ...r, [field]: value } : r) })); };
+65:     const addRoad = () => { const newId = Math.max(...inputs.roads.map(r => r.id), 0) + 1; setInputs(prev => ({ ...prev, roads: [...prev.roads, { id: newId, name: '新道路', width: 6, orientation: 'custom', type: 'secondary' }] })); };
+66:     const removeRoad = (id) => { if (inputs.roads.length > 1) setInputs(prev => ({ ...prev, roads: prev.roads.filter(r => r.id !== id) })); };
+67:     const handleUpdateRoads = (newRoads) => { setInputs(prev => ({ ...prev, roads: newRoads })); };
+68: 
+69:     const { totalBaseArea, results, finalRes } = useSiteAnalysis(lots, inputs, params, overrides);
+70:     const { siteResults, combined } = useMultiSiteAnalysis(sites, params);
+71: 
+72:     const handleConfirmPlacement = () => {
+73:         const newIdx = sites.length;
+74:         const label = SITE_LABELS[newIdx] || String(newIdx + 1);
+75:         const newSite = createDefaultSite(`基地 ${label}`, Date.now());
+76:         
+77:         // PlanAnalysis3D now sends the finalized absolute world coordinates 
+78:         // regardless of whether it was snapped or free-floated.
+79:         let position = {
+80:             x: parseFloat(placementOffset.x || 0),
+81:             y: parseFloat(placementOffset.y || 0)
+82:         };
+83: 
+84:         let isColliding = false;
+85:         const newBaseArea = newSite.inputs?.baseArea || 239;
+86:         const activeBaseArea = activeSite.inputs?.baseArea || 239;
+87:         const minDst2 = Math.pow(Math.sqrt(activeBaseArea) * 0.9, 2);
+88: 
+89:         sites.forEach((s) => {
+90:             const sx = s.position?.x || 0;
+91:             const sy = s.position?.y || 0;
+92:             const dist2 = Math.pow(sx - position.x, 2) + Math.pow(sy - position.y, 2);
+93:             if (dist2 < minDst2) {
+94:                 isColliding = true;
+95:             }
+96:         });
+97: 
+98:         if (isColliding) {
+99:             alert("放置位置與現有基地重疊，請重新調整邊界或偏移量！");
+100:             return;
+101:         }
+102: 
+103:         newSite.position = position;
+104:         setSites(prev => [...prev, newSite]);
+105:         setActiveSiteIndex(newIdx);
+106:         setPlacementMode(false);
+107:         setReferenceEdge(null);
+108:         setPlacementOffset({ x: 0, y: 0 });
+109:         setShowAddSiteDialog(false);
+110:     };
+111: 
+112:     // ── Site Management ──
+113:     const handleAddSite = (snapDir) => {
+114:         if (snapDir === 'free') {
+115:             setPlacementMode('independent');
+116:             setReferenceEdge(null);
+117:             setShowAddSiteDialog(false);
+118:             return;
+119:         }
+120: 
+121:         const newIdx = sites.length;
+122:         const label = SITE_LABELS[newIdx] || String(newIdx + 1);
+123:         const newSite = createDefaultSite(`基地 ${label}`, Date.now());
+124:         const w = parseFloat(activeSite.inputs.baseWidthM || activeSite.inputs.baseWidth) || Math.sqrt(totalBaseArea || 239);
+125:         const d = parseFloat(activeSite.inputs.baseDepthM) || ((totalBaseArea || 239) / w);
+126:         const ap = activeSite.position || { x: 0, y: 0 };
+127:         if (snapDir === 'back')       newSite.position = { x: ap.x, y: ap.y - d };
+128:         else if (snapDir === 'left')  newSite.position = { x: ap.x - w, y: ap.y };
+129:         else if (snapDir === 'right') newSite.position = { x: ap.x + w, y: ap.y };
+130:         
+131:         // Edge syncing base case: generating points could happen here later
+132:         setSites(prev => [...prev, newSite]);
+133:         setActiveSiteIndex(newIdx);
+134:         setShowAddSiteDialog(false);
+135:     };
+136:     const handleRemoveSite = (idx) => {
+137:         if (sites.length <= 1) return;
+138:         if (confirm(`確定要刪除 ${sites[idx].name} 嗎？`)) {
+139:             setSites(prev => prev.filter((_, i) => i !== idx));
+140:             setActiveSiteIndex(prev => prev > idx ? prev - 1 : (prev === idx ? Math.max(0, idx - 1) : prev));
+141:         }
+142:     };
+143:     const handleUpdateSiteGeometry = (idx, geometry) => {
+144:         setSites(prev => {
+145:             const next = [...prev];
+146:             const oldGeom = prev[idx].baseGeometry;
+147:             const newGeom = geometry;
+148: 
+149:             // Sync adjacent sites if points count remained the same (simple dragging)
+150:             if (oldGeom && oldGeom.points && newGeom && newGeom.points && oldGeom.points.length === newGeom.points.length) {
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

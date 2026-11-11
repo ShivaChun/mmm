@@ -1,0 +1,63 @@
+Created At: 2026-07-02T16:45:52Z
+Completed At: 2026-07-02T16:45:52Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 854
+Total Bytes: 72502
+Showing lines 800 to 854
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+800:                                             <tr className="hover:bg-stone-50">
+801:                                                 <td className="p-6 pl-10 border-l-8 border-emerald-500 font-bold">合計基地面積</td>
+802:                                                 <td className="p-6 text-right font-black text-xl">{formatNum(combined.totalBase)}</td>
+803:                                                 <td className="p-6 text-right font-black text-stone-500">{formatNum(toPing(combined.totalBase))}</td>
+804:                                             </tr>
+805:                                             <tr className="hover:bg-stone-50">
+806:                                                 <td className="p-6 pl-10 border-l-8 border-emerald-500 font-bold">合計允建建築面積</td>
+807:                                                 <td className="p-6 text-right font-black text-xl">{formatNum(combined.totalMaxBuildingArea)}</td>
+808:                                                 <td className="p-6 text-right font-black text-stone-500">{formatNum(toPing(combined.totalMaxBuildingArea))}</td>
+809:                                             </tr>
+810:                                             <tr className="hover:bg-stone-50">
+811:                                                 <td className="p-6 pl-10 border-l-8 border-emerald-500 font-bold">合計法定容積</td>
+812:                                                 <td className="p-6 text-right font-black text-xl">{formatNum(combined.totalStatutoryFA)}</td>
+813:                                                 <td className="p-6 text-right font-black text-stone-500">{formatNum(toPing(combined.totalStatutoryFA))}</td>
+814:                                             </tr>
+815: 
+816:                                             <tr className="bg-emerald-600 text-white border-y-8 border-emerald-900">
+817:                                                 <td className="p-8 font-black text-3xl italic uppercase leading-none">合計允建總樓地板面積</td>
+818:                                                 <td className="p-8 text-right font-black text-4xl leading-none">{formatNum(combined.totalCFA)}</td>
+819:                                                 <td className="p-8 text-right font-black text-4xl leading-none">{formatNum(toPing(combined.totalCFA))}</td>
+820:                                             </tr>
+821: 
+822:                                             <tr className="hover:bg-stone-50">
+823:                                                 <td className="p-6 pl-10 border-l-8 border-emerald-500 font-bold">合計停車需求</td>
+824:                                                 <td className="p-6 text-right font-black text-xl" colSpan={2}>
+825:                                                     法定 {combined.totalStatutoryParking} 部 / 可停 {combined.totalPossibleParking} 部
+826:                                                 </td>
+827:                                             </tr>
+828:                                             <tr className="hover:bg-stone-50">
+829:                                                 <td className="p-6 pl-10 border-l-8 border-emerald-500 font-bold">合計工程預算</td>
+830:                                                 <td className="p-6 text-right font-black text-xl text-emerald-600 italic" colSpan={2}>
+831:                                                     {formatNum(combined.totalEstimatedBudget)} 萬
+832:                                                 </td>
+833:                                             </tr>
+834:                                             <tr className="hover:bg-stone-100 border-t-4 border-emerald-600">
+835:                                                 <td className="p-6 font-black uppercase text-xl border-l-8 border-emerald-600">綜合坪效</td>
+836:                                                 <td className="p-6 text-right font-black text-3xl text-emerald-600 italic" colSpan={2}>
+837:                                                     {formatNum(combined.avgEfficiency)} 倍
+838:                                                 </td>
+839:                                             </tr>
+840:                                         </tbody>
+841:                                     </table>
+842:                                 </div>
+843:                             </div>
+844:                         </div>
+845:                     </section>
+846:                 )}
+847:                     <ContextMenu x={contextMenu.x} y={contextMenu.y} isOpen={contextMenu.isOpen} onClose={() => setContextMenu({ ...contextMenu, isOpen: false })} activePanels={activePanels} onTogglePanel={(panel) => setActivePanels(prev => prev.includes(panel) ? prev.filter(p => p !== panel) : [...prev, panel])} />
+848:             </div>
+849:         </div>
+850:     );
+851: };
+852: 
+853: export default Cal;
+854: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

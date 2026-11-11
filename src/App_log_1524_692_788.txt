@@ -1,0 +1,105 @@
+Created At: 2026-07-07T17:55:33Z
+Completed At: 2026-07-07T17:55:33Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 825
+Total Bytes: 43458
+Showing lines 692 to 788
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+692:             {/* FLOATING PANELS */}
+693:             {activePanels.includes('inputs') && (
+694:                 <DraggablePanel title="專案設定" onClose={() => setActivePanels(prev => prev.filter(p => p !== 'inputs'))} defaultSize={{w: 400, h: 600}}>
+695:                     <div className="space-y-4">
+696:                         <div className="flex flex-col">
+697:                             <label className="text-xs font-black uppercase tracking-widest text-[var(--text-muted)]">專案名稱</label>
+698:                             <input 
+699:                                 type="text" 
+700:                                 name="projectName" 
+701:                                 value={inputs.projectName} 
+702:                                 onChange={handleInputChange} 
+703:                                 placeholder="輸入專案名稱" 
+704:                                 className="border-b-4 border-[var(--border-strong)] focus:border-[var(--text-accent)] outline-none bg-transparent py-2 text-xl font-black theme-text placeholder:text-stone-400" 
+705:                             />
+706:                         </div>
+707:                         <div className="grid grid-cols-1 gap-4">
+708:                             <div>
+709:                                 <label className={labelClass}>縣市區域</label>
+710:                                 <input type="text" name="district" value={inputs.district} onChange={handleInputChange} className={inputClass} />
+711:                             </div>
+712:                             <div>
+713:                                 <label className={labelClass}>土地使用分區</label>
+714:                                 <input type="text" name="zoneType" value={inputs.zoneType} onChange={handleInputChange} className={inputClass} />
+715:                             </div>
+716:                             <div>
+717:                                 <label className={labelClass}>適用都市計畫</label>
+718:                                 <input type="text" name="urbanPlanName" value={inputs.urbanPlanName} onChange={handleInputChange} className={inputClass} />
+719:                             </div>
+720:                         </div>
+721:                         
+722:                         <div className="grid grid-cols-2 gap-4">
+723:                             <div>
+724:                                 <label className={labelClass}>法定建蔽率 (%)</label>
+725:                                 <input type="number" name="coverageRatio" value={inputs.coverageRatio} onChange={handleInputChange} className={inputClass} />
+726:                             </div>
+727:                             <div>
+728:                                 <label className={labelClass}>法定容積率 (%)</label>
+729:                                 <input type="number" name="floorRatio" value={inputs.floorRatio} onChange={handleInputChange} className={inputClass} />
+730:                             </div>
+731:                         </div>
+732:                     </div>
+733:                 </DraggablePanel>
+734:             )}
+735: 
+736:             {activePanels.includes('sites') && (
+737:                 <DraggablePanel title="基地管理" onClose={() => setActivePanels(prev => prev.filter(p => p !== 'sites'))} defaultSize={{w: 360, h: 400}}>
+738:                     <div className="space-y-4">
+739:                         <div className="flex items-center gap-2 flex-wrap mb-4">
+740:                             {sites.map((site, idx) => (
+741:                                 <button 
+742:                                     key={site.id} 
+743:                                     onClick={() => setActiveSiteIndex(idx)} 
+744:                                     className={`px-4 py-2 font-black transition-all border-4 ${activeSiteIndex === idx ? 'theme-btn-active scale-105 shadow-[4px_4px_0_#111]' : 'theme-btn border-transparent opacity-70 hover:opacity-100 hover:border-black'}`}
+745:                                 >
+746:                                     {site.name}
+747:                                 </button>
+748:                             ))}
+749:                             <button onClick={() => setShowAddSiteDialog(true)} className="px-3 py-2 border-4 border-dashed border-[var(--border-strong)] text-[var(--text-muted)] hover:border-black hover:text-black font-black transition-colors rounded-none flex items-center gap-1">
+750:                                 <Plus size={20} strokeWidth={3} /> 新增
+751:                             </button>
+752:                         </div>
+753:                         {sites.length > 1 && (
+754:                             <button onClick={() => handleRemoveSite(activeSite.id)} className="w-full flex items-center justify-center gap-2 p-3 border-4 border-red-200 bg-red-50 text-red-600 font-black hover:bg-red-600 hover:text-white hover:border-red-700 transition-colors">
+755:                                 <Trash2 size={20} strokeWidth={3} /> 刪除當前基地
+756:                             </button>
+757:                         )}
+758:                     </div>
+759:                 </DraggablePanel>
+760:             )}
+761: 
+762:             {activePanels.includes('summary') && (
+763:                 <DraggablePanel title="評估結果" onClose={() => setActivePanels(prev => prev.filter(p => p !== 'summary'))} defaultSize={{w: 500, h: 700}}>
+764:                     <div className="space-y-6">
+765:                         <div className="grid grid-cols-2 gap-4">
+766:                             <div className="p-4 border-4 border-black bg-stone-50">
+767:                                 <div className="text-xs font-black text-stone-500 mb-1">總銷售坪數</div>
+768:                                 <div className="text-3xl font-black text-[var(--text-accent)] num-font">{formatNum(toPing(finalRes.totalSaleable))} <span className="text-sm text-stone-600">坪</span></div>
+769:                             </div>
+770:                             <div className="p-4 border-4 border-black bg-stone-50">
+771:                                 <div className="text-xs font-black text-stone-500 mb-1">容積單價</div>
+772:                                 <div className="text-3xl font-black text-emerald-600 num-font">{formatNum((finalRes.totalSaleable / (finalRes.base * (inputs.floorRatio/100))).toFixed(2))} <span className="text-sm text-stone-600">坪/容積</span></div>
+773:                             </div>
+774:                         </div>
+775:                         <table className="w-full text-sm border-collapse border-4 border-black bg-white shadow-[4px_4px_0_#111]">
+776:                             <tbody>
+777:                                 <InputRow id="totalCFA" label="總樓地板面積" value={finalRes.totalCFA} />
+778:                                 <InputRow id="totalSaleable" label="總銷售面積" value={finalRes.totalSaleable} highlight={true} />
+779:                                 <InputRow id="balconyArea" label="陽台面積" value={finalRes.balconyArea} />
+780:                                 <InputRow id="totalCarArea" label="停車空間面積" value={finalRes.totalCarArea} />
+781:                             </tbody>
+782:                         </table>
+783:                     </div>
+784:                 </DraggablePanel>
+785:                     </div>
+786:                 )}
+787: 
+788:                 {/* 3D VISUALIZER SECTION - FULLSCREEN */}
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

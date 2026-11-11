@@ -1,0 +1,1110 @@
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Layers, Map as MapIcon, RotateCw, Type, AlignLeft, Hexagon, Maximize2, Move, Box, CheckCircle2, ChevronDown, ChevronUp, Lock, Unlock, AlertTriangle, DivideSquare, Edit2, Undo2, Shovel, LayoutDashboard } from 'lucide-react';
+import SitePolygonEditor, { EditableInput, EditMenu2D, CoordinatePopup } from './SitePolygonEditor';
+import { generateSvgPath, getPolygonCentroid, getPolygonBounds, calculatePolygonArea, scalePolygon, discretizePolygon, getSegmentNormal, getLineIntersection, offsetPolygon, normalizeWithCurves, clipPolygonByPolygon, getSplitUnits, constrainPolygonToLegalBoundary } from '../utils/polygon';
+import { toPing, formatNum } from '../utils/geometry';
+
+
+        const PlanAnalysis2D = ({ layers, baseWidthM, baseDepthM, onSelectFloor, selectedFloorId, isDarkMode, onUpdateSetting, floorSettings, inputs, scale3d, basements, onToggleBasement, activeBasementArea, totalAllowedArea, showCheckLines, volumeLimit, parkingOn1F, onToggleParkingLocation, onClose, basePoints, baseCurves, onAddRoad, excavationPoints, excavationCurves, frontageIndices, onUpdateFrontageIndices, onAddFloor, onRemoveFloor, edgeTypes, onUpdateEdgeTypes, view, onUpdateView, onUpdateInputs, onUpdateRoads, onEditEnd, unitSettings, onUpdateUnitSettings, onApplyAll, floorsAboveValue, onUpdateFloorsAbove }) => {
+
+            // 1. Calculate Default Points (Temporary display only)
+            const defaultBasePts = useMemo(() => {
+                const w = baseWidthM;
+                const d = baseDepthM;
+                return [{ x: -w / 2, y: -d / 2 }, { x: w / 2, y: -d / 2 }, { x: w / 2, y: d / 2 }, { x: -w / 2, y: d / 2 }];
+            }, [baseWidthM, baseDepthM]);
+            const [showFloorDialog, setShowFloorDialog] = useState(false);
+            const [showApplyAllDialog, setShowApplyAllDialog] = useState(false);
+            const [floorConfig, setFloorConfig] = useState({ above: Math.max(1, parseInt(floorsAboveValue || '1')), below: Math.max(0, parseInt(inputs.floorsBelow || '0')) });
+
+            // Use default points if explicit basePoints are null, to prevent 3D state change
+            const currentBasePoints = basePoints || defaultBasePts;
+            const baseCentroid = useMemo(() => getPolygonCentroid(currentBasePoints || defaultBasePts), [currentBasePoints, defaultBasePts]);
+            const groupedLayers = useMemo(() => {
+                const map = {};
+                const order = [];
+                (layers || []).forEach(layer => {
+                    const baseId = layer.id.split('-')[0];
+                    if (!map[baseId]) {
+                        map[baseId] = { id: baseId, units: [] };
+                        order.push(baseId);
+                    }
+                    map[baseId].units.push(layer);
+                });
+                return order.map(id => map[id]);
+            }, [layers]);
+
+            const normalizedSelectedFloorId = useMemo(() => {
+                if (!selectedFloorId) return null;
+                if (selectedFloorId === 'base' || selectedFloorId === 'excavation' || /^B\d+$/.test(selectedFloorId)) {
+                    return selectedFloorId;
+                }
+                return selectedFloorId.includes('-') ? selectedFloorId.split('-')[0] : selectedFloorId;
+            }, [selectedFloorId]);
+
+            let displayLayer = null;
+            if (normalizedSelectedFloorId === 'base') {
+                // Ensure displayLayer always has points so EditMenu2D works without auto-initializing state
+                displayLayer = { id: 'base', points: currentBasePoints, realWidth: baseWidthM, realDepth: baseDepthM, realArea: inputs.baseArea, isViolation: false, curves: baseCurves };
+            } else if (normalizedSelectedFloorId === 'excavation') {
+                const scaleRate = Math.sqrt((inputs.excavationRatio || 70) / 100);
+                const defaultExcavationW = baseWidthM * scaleRate;
+                const defaultExcavationD = baseDepthM * scaleRate;
+                let excPts = excavationPoints;
+                let excCurvs = excavationCurves || null;
+                if (!excPts && currentBasePoints) {
+                    const scaled = scalePolygon(currentBasePoints, baseCurves, scaleRate, { x: 0, y: 0 });
+                    excPts = scaled.points;
+                    excCurvs = excCurvs || scaled.curves;
+                }
+                displayLayer = { id: 'excavation', points: excPts, realWidth: defaultExcavationW, realDepth: defaultExcavationD, realArea: excPts ? calculatePolygonArea(excPts, excCurvs) : (defaultExcavationW * defaultExcavationD), isViolation: false, curves: excCurvs };
+            } else if (normalizedSelectedFloorId && /^B\d+$/.test(normalizedSelectedFloorId)) {
+                const basement = (basements || []).find(b => b.id === normalizedSelectedFloorId);
+                if (basement) {
+                    let fallbackPts = excavationPoints;
+                    let fallbackCurves = excavationCurves || null;
+                    if (!fallbackPts && currentBasePoints) {
+                        const scaleRate = Math.sqrt((inputs.excavationRatio || 70) / 100);
+                        const scaled = scalePolygon(currentBasePoints, baseCurves, scaleRate, { x: 0, y: 0 });
+                        fallbackPts = scaled.points;
+                        fallbackCurves = scaled.curves;
+                    }
+                    const setting = floorSettings?.[normalizedSelectedFloorId] || {};
+                    const pts = setting.points || fallbackPts;
+                    const curves = setting.curves || fallbackCurves || null;
+                    const defaultW = baseWidthM * Math.sqrt((inputs.excavationRatio || 70) / 100);
+                    const defaultD = baseDepthM * Math.sqrt((inputs.excavationRatio || 70) / 100);
+                    const area = pts ? calculatePolygonArea(pts, curves) : basement.area;
+                    displayLayer = { id: normalizedSelectedFloorId, points: pts, curves, realWidth: defaultW, realDepth: defaultD, realArea: area, isViolation: false };
+                }
+            } else if (normalizedSelectedFloorId) {
+                const exactLayer = layers.find(l => l.id === normalizedSelectedFloorId);
+                const splitLayer = exactLayer || layers.find(l => l.id.startsWith(`${normalizedSelectedFloorId}-`));
+                if (splitLayer) {
+                    const setting = floorSettings?.[normalizedSelectedFloorId] || {};
+                    const isSplitUnit = splitLayer.id.includes('-') || Boolean(setting.units && setting.units.length > 0) || Boolean(setting.unitConfig);
+                    // 優先採用由當前基地形狀、道路與法規退縮即時計算的 unsplitPoints / unsplitCurves
+                    const basePts = splitLayer.unsplitPoints || (!isSplitUnit ? splitLayer.points : null) || setting.points || splitLayer.points || null;
+                    const baseCurvs = splitLayer.unsplitCurves || (!isSplitUnit ? splitLayer.curves : null) || setting.curves || splitLayer.curves || null;
+                    const baseArea = basePts ? calculatePolygonArea(basePts, baseCurvs) : splitLayer.realArea;
+                    displayLayer = { ...splitLayer, id: normalizedSelectedFloorId, points: basePts, curves: baseCurvs, realArea: baseArea };
+                }
+            }
+            const savedUnits = useMemo(() => {
+                if (!normalizedSelectedFloorId) return null;
+                const unitLayers = (layers || []).filter(l => l.id.startsWith(`${normalizedSelectedFloorId}-`) && l.points);
+                if (unitLayers.length > 0) {
+                    return unitLayers.map(l => l.points);
+                }
+                return floorSettings?.[normalizedSelectedFloorId]?.units || null;
+            }, [layers, floorSettings, normalizedSelectedFloorId]);
+
+            const [containerSize, setContainerSize] = useState({ w: 800, h: 600 });
+            useEffect(() => { const updateSize = () => { setContainerSize({ w: window.innerWidth, h: window.innerHeight * 0.7 }); }; updateSize(); window.addEventListener('resize', updateSize); return () => window.removeEventListener('resize', updateSize); }, []);
+
+            const maxDim = Math.max(baseWidthM, baseDepthM); const padding = 40;
+            const scale = Math.min((containerSize.w - padding * 2) / maxDim, (containerSize.h - padding * 2) / maxDim);
+            const baseW = baseWidthM * scale; const baseH = baseDepthM * scale;
+            let xPos = 0, yPos = 0;
+            if (displayLayer && selectedFloorId !== 'base' && selectedFloorId !== 'excavation') {
+                const sX = (displayLayer.shiftX || 0);
+                const sY = (displayLayer.shiftYPx || 0);
+                const shiftX_M = sX / (scale3d || 1);
+                const shiftY_M = sY / (scale3d || 1);
+                xPos = shiftX_M * scale;
+                yPos = shiftY_M * scale;
+            }
+            const containerRef = useRef(null);
+
+            const onWheel = (e) => {
+                e.stopPropagation(); e.preventDefault();
+
+                // Target Zoom (Zoom towards cursor)
+                const rect = e.currentTarget.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+
+                // Mouse position relative to center
+                const mRelX = mouseX - centerX;
+                const mRelY = mouseY - centerY;
+
+                const s = Math.exp(-e.deltaY * 0.001);
+                const newK = Math.min(Math.max(0.5, view.k * s), 5);
+
+                // Calculate new translation to keep mouse point fixed
+                // NewOffset = OldOffset * Ratio + MousePos * (1 - Ratio)
+                const scaleRatio = newK / view.k;
+                const newX = view.x * scaleRatio + mRelX * (1 - scaleRatio);
+                const newY = view.y * scaleRatio + mRelY * (1 - scaleRatio);
+
+                onUpdateView(v => ({ ...v, k: newK, x: newX, y: newY }));
+            };
+
+            const [isPanning, setIsPanning] = useState(false);
+            const panStart = useRef({ x: 0, y: 0 });
+            const lastTouchDist = useRef(null);
+            const lastTouchPos = useRef(null);
+            const getTouchDistance2D = (touches) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+
+            const handlePanStart = (e) => { if (!isPanning) return; if (selectedPointForEdit) setSelectedPointForEdit(null); if (e.button !== 0 && e.button !== 1) return; panStart.current = { x: e.clientX, y: e.clientY }; e.target.setPointerCapture(e.pointerId); };
+            const handlePanMove = (e) => { if (!isPanning) return; const dx = e.clientX - panStart.current.x; const dy = e.clientY - panStart.current.y; onUpdateView(v => ({ ...v, x: v.x + dx, y: v.y + dy })); panStart.current = { x: e.clientX, y: e.clientY }; };
+            const handlePanEnd = (e) => { if (e.target && e.target.releasePointerCapture) e.target.releasePointerCapture(e.pointerId); };
+            const handleTouchPanStart = (e) => {
+                if (!displayLayer) return;
+                if (e.target?.dataset?.type) return;
+                if (e.cancelable) e.preventDefault();
+                e.stopPropagation();
+                if (e.touches.length === 2) {
+                    lastTouchDist.current = getTouchDistance2D(e.touches);
+                    lastTouchPos.current = null;
+                } else if (e.touches.length === 1) {
+                    lastTouchPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                    lastTouchDist.current = null;
+                }
+            };
+            const handleTouchPanMove = (e) => {
+                if (!displayLayer) return;
+                if (e.cancelable) e.preventDefault();
+                e.stopPropagation();
+                if (e.touches.length === 2 && lastTouchDist.current !== null) {
+                    const currentDist = getTouchDistance2D(e.touches);
+                    const delta = currentDist - lastTouchDist.current;
+                    onUpdateView(v => ({ ...v, k: Math.min(5, Math.max(0.5, v.k + delta * 0.005)) }));
+                    lastTouchDist.current = currentDist;
+                    return;
+                }
+                if (e.touches.length === 1 && lastTouchPos.current) {
+                    const dx = e.touches[0].clientX - lastTouchPos.current.x;
+                    const dy = e.touches[0].clientY - lastTouchPos.current.y;
+                    onUpdateView(v => ({ ...v, x: v.x + dx, y: v.y + dy }));
+                    lastTouchPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                }
+            };
+            const handleTouchPanEnd = () => {
+                lastTouchDist.current = null;
+                lastTouchPos.current = null;
+            };
+
+            const isDragging = useRef(false);
+            const lastPos = useRef({ x: 0, y: 0 });
+            const dragStartPos = useRef({ x: 0, y: 0 });
+            const dragStartPoint = useRef(null);
+
+            const [isRoadSelectMode, setIsRoadSelectMode] = useState(false);
+            const [interactionMode, setInteractionMode] = useState('none');
+            const [selectedPointForEdit, setSelectedPointForEdit] = useState(null);
+            const [selectedCurveForEdit, setSelectedCurveForEdit] = useState(null);
+            const longPressTimer = useRef(null);
+            const [isAreaLocked, setIsAreaLocked] = useState(false);
+            const lockedAreaRef = useRef(null);
+            const [unitMenuOffset, setUnitMenuOffset] = useState({ x: 0, y: 0 });
+            const unitMenuDragRef = useRef({ dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 });
+            useEffect(() => {
+                const handleMove = (e) => {
+                    if (!unitMenuDragRef.current.dragging) return;
+                    const dx = e.clientX - unitMenuDragRef.current.startX;
+                    const dy = e.clientY - unitMenuDragRef.current.startY;
+                    setUnitMenuOffset({ x: unitMenuDragRef.current.originX + dx, y: unitMenuDragRef.current.originY + dy });
+                };
+                const handleUp = () => {
+                    unitMenuDragRef.current.dragging = false;
+                };
+                window.addEventListener('pointermove', handleMove);
+                window.addEventListener('pointerup', handleUp);
+                return () => {
+                    window.removeEventListener('pointermove', handleMove);
+                    window.removeEventListener('pointerup', handleUp);
+                };
+            }, []);
+
+            // Task 3: Unit Split State (Lifted to Visualizer3D)
+            // const [isUnitSplitMode, setIsUnitSplitMode] = useState(false);
+            // const [splitParams, setSplitParams] = useState({ axis: 'x', ratio: 0.5, gap: 0 });
+
+            const previewUnits = useMemo(() => {
+                if (!unitSettings?.enabled || !displayLayer?.points) return null;
+                const allowedPts = displayLayer.allowedPoints || displayLayer.unsplitPoints || displayLayer.points;
+                const allowedCurvs = displayLayer.allowedCurves || displayLayer.unsplitCurves || displayLayer.curves || null;
+                return getSplitUnits(displayLayer.points, unitSettings, displayLayer.curves, allowedPts, allowedCurvs);
+            }, [unitSettings, displayLayer?.points, displayLayer?.curves, displayLayer?.allowedPoints, displayLayer?.allowedCurves, displayLayer?.unsplitPoints, displayLayer?.unsplitCurves]);
+            const unitsToRender = useMemo(() => {
+                if (previewUnits) return null;
+                if (!savedUnits || savedUnits.length === 0) return null;
+                return savedUnits;
+            }, [previewUnits, savedUnits]);
+            const handleUnitMenuPointerDown = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                unitMenuDragRef.current = { dragging: true, startX: e.clientX, startY: e.clientY, originX: unitMenuOffset.x, originY: unitMenuOffset.y };
+            };
+
+            const handleDragStart = (e) => { if (e.button !== 0) return; if (e.target.dataset.type === 'control-point' || e.target.dataset.type === 'edge-line' || e.target.dataset.type === 'curve-handle') return; e.stopPropagation(); isDragging.current = true; lastPos.current = { x: e.clientX, y: e.clientY }; e.target.setPointerCapture(e.pointerId); setSelectedPointForEdit(null); setSelectedCurveForEdit(null); };
+
+            const toWorldBaseData = (points, curves) => {
+                if (!points || points.length === 0) return { points, curves };
+                const worldPoints = points.map(p => ({ x: p.x, y: p.y }));
+                let worldCurves = null;
+                if (curves) {
+                    worldCurves = {};
+                    Object.keys(curves).forEach(k => {
+                        const cp = curves[k];
+                        worldCurves[k] = { x: cp.x, y: cp.y };
+                    });
+                }
+                return { points: worldPoints, curves: worldCurves };
+            };
+            const toWorldFloorPoints = (points) => {
+                if (!points || points.length === 0) return points;
+                const c = baseCentroid || { x: 0, y: 0 };
+                return points.map(p => ({ x: p.x + c.x, y: p.y + c.y }));
+            };
+            const toWorldFloorCurves = (curves) => {
+                if (!curves) return curves;
+                const c = baseCentroid || { x: 0, y: 0 };
+                const worldCurves = {};
+                Object.keys(curves).forEach(k => {
+                    const cp = curves[k];
+                    worldCurves[k] = { x: cp.x + c.x, y: cp.y + c.y };
+                });
+                return worldCurves;
+            };
+
+            const updateSetting = (rawFloorId, field, value) => {
+                const floorId = (rawFloorId && rawFloorId !== 'base' && rawFloorId !== 'excavation' && !/^B\d+$/.test(rawFloorId) && rawFloorId.includes('-'))
+                    ? rawFloorId.split('-')[0]
+                    : rawFloorId;
+                if (floorId === 'base') {
+                    if (field === 'points') {
+                        const { points: worldPoints, curves: worldCurves } = toWorldBaseData(value, displayLayer?.curves || baseCurves);
+                        onUpdateSetting(floorId, 'points', worldPoints);
+                        if (worldCurves) onUpdateSetting(floorId, 'curves', worldCurves);
+                        const bounds = getPolygonBounds(worldPoints);
+                        if (bounds) {
+                            const baseWidthM = bounds.maxX - bounds.minX;
+                            const baseDepthM = bounds.maxY - bounds.minY;
+                            onUpdateInputs('baseWidth', parseFloat(baseWidthM.toFixed(2)));
+                            onUpdateInputs('baseWidthM', parseFloat(baseWidthM.toFixed(2)));
+                            onUpdateInputs('baseDepthM', parseFloat(baseDepthM.toFixed(2)));
+                        }
+                        const newBaseArea = calculatePolygonArea(worldPoints, worldCurves);
+                        if (newBaseArea > 0) {
+                            onUpdateInputs('baseArea', parseFloat(newBaseArea.toFixed(2)));
+                        }
+                        onUpdateInputs('baseVersion', (inputs.baseVersion || 0) + 1);
+                        return;
+                    }
+                    if (field === 'curves') {
+                        const { points: worldPoints, curves: worldCurves } = toWorldBaseData(displayLayer?.points || currentBasePoints, value);
+                        if (!basePoints && worldPoints) {
+                            onUpdateSetting(floorId, 'points', worldPoints);
+                        }
+                        onUpdateSetting(floorId, 'curves', worldCurves);
+                        if (worldPoints) {
+                            const newBaseArea = calculatePolygonArea(worldPoints, worldCurves);
+                            if (newBaseArea > 0) {
+                                onUpdateInputs('baseArea', parseFloat(newBaseArea.toFixed(2)));
+                            }
+                        }
+                        onUpdateInputs('baseVersion', (inputs.baseVersion || 0) + 1);
+                        return;
+                    }
+                }
+                if (field === 'points') {
+                    let constrainedPts = value;
+                    if (floorId !== 'excavation' && !/^B\d+$/.test(floorId) && displayLayer?.allowedPoints) {
+                        constrainedPts = constrainPolygonToLegalBoundary(value, displayLayer?.curves, displayLayer.allowedPoints, displayLayer.allowedCurves).points;
+                    }
+                    const worldPoints = toWorldFloorPoints(constrainedPts);
+                    onUpdateSetting(floorId, 'points', worldPoints);
+                    if (displayLayer?.curves) {
+                        const worldCurves = toWorldFloorCurves(displayLayer.curves);
+                        if (worldCurves) onUpdateSetting(floorId, 'curves', worldCurves);
+                    }
+                    return;
+                }
+                if (field === 'curves') {
+                    // Ensure floor points are also persisted if not yet saved so curves work even when base has no curves
+                    if (floorId === 'excavation') {
+                        if (!excavationPoints && displayLayer?.points) {
+                            onUpdateSetting('excavation', 'points', toWorldFloorPoints(displayLayer.points));
+                        }
+                    } else if (!floorSettings?.[floorId]?.points && displayLayer?.points) {
+                        onUpdateSetting(floorId, 'points', toWorldFloorPoints(displayLayer.points));
+                    }
+                    const worldCurves = toWorldFloorCurves(value);
+                    onUpdateSetting(floorId, 'curves', worldCurves);
+                    return;
+                }
+                if (field === 'units') {
+                    const worldUnits = Array.isArray(value)
+                        ? value.map(uPts => toWorldFloorPoints(uPts))
+                        : value;
+                    onUpdateSetting(floorId, 'units', worldUnits);
+                    return;
+                }
+                onUpdateSetting(floorId, field, value);
+            };
+
+            const handleDragMove = (e) => { if (!isDragging.current) return; if (normalizedSelectedFloorId === 'base') return; const dxPx = (e.clientX - lastPos.current.x) / view.k; const dyPx = (e.clientY - lastPos.current.y) / view.k; const dxM = dxPx / scale; const dyM = dyPx / scale; if (normalizedSelectedFloorId === 'excavation') return; updateSetting(displayLayer.id, 'offset_delta', { x: dxM, y: dyM }); lastPos.current = { x: e.clientX, y: e.clientY }; };
+            const handleDragEnd = (e) => { isDragging.current = false; e.target.releasePointerCapture(e.pointerId); };
+
+            const draggingPointIdx = useRef(null); const draggingCurveIdx = useRef(null); const [selectedIndices, setSelectedIndices] = useState(new Set()); const [lockedEdgeIndices, setLockedEdgeIndices] = useState(new Set()); const draggingEdgeIdx = useRef(null);
+
+            const handlePointPointerDown = (e, idx) => {
+                e.stopPropagation(); e.target.setPointerCapture(e.pointerId);
+                let newSelected;
+                if (e.shiftKey) { newSelected = new Set(selectedIndices); if (newSelected.has(idx)) { newSelected.delete(idx); draggingPointIdx.current = null; } else { newSelected.add(idx); draggingPointIdx.current = idx; } } else { if (selectedIndices.has(idx) && selectedIndices.size > 1) { newSelected = new Set(selectedIndices); } else { newSelected = new Set([idx]); } draggingPointIdx.current = idx; }
+                setSelectedIndices(newSelected); lastPos.current = { x: e.clientX, y: e.clientY }; dragStartPos.current = { x: e.clientX, y: e.clientY }; dragStartPoint.current = displayLayer.points[idx];
+                setSelectedPointForEdit({ idx, point: displayLayer.points[idx] }); setSelectedCurveForEdit(null);
+                // Area Lock Init
+                if (isAreaLocked && displayLayer.points) lockedAreaRef.current = calculatePolygonArea(displayLayer.points);
+            };
+
+            const handleCurvePointerDown = (e, idx) => { e.stopPropagation(); e.target.setPointerCapture(e.pointerId); draggingCurveIdx.current = idx; lastPos.current = { x: e.clientX, y: e.clientY }; dragStartPos.current = { x: e.clientX, y: e.clientY }; dragStartPoint.current = displayLayer.curves?.[idx] || { x: 0, y: 0 }; setSelectedCurveForEdit(idx); setSelectedPointForEdit(null); };
+
+            const handlePointPointerMove = (e) => {
+                if (draggingPointIdx.current === null && draggingEdgeIdx.current === null && draggingCurveIdx.current === null) return;
+                e.stopPropagation();
+                let dxPx = (e.clientX - lastPos.current.x) / view.k; let dyPx = (e.clientY - lastPos.current.y) / view.k;
+                if (e.shiftKey && (draggingPointIdx.current !== null || draggingCurveIdx.current !== null)) { const totalDx = e.clientX - dragStartPos.current.x; const totalDy = e.clientY - dragStartPos.current.y; if (Math.abs(totalDx) > Math.abs(totalDy)) { dyPx = 0; } else { dxPx = 0; } }
+                const dxM = dxPx / scale; const dyM = dyPx / scale;
+                let localDx = dxM; let localDy = dyM;
+                if (displayLayer.rotation) { const rotRad = -(displayLayer.rotation || 0) * (Math.PI / 180); const cos = Math.cos(rotRad); const sin = Math.sin(rotRad); localDx = dxM * cos - dyM * sin; localDy = dxM * sin + dyM * cos; }
+
+                if (draggingCurveIdx.current !== null) {
+                    const currentCurves = { ...(displayLayer.curves || {}) }; const idx = draggingCurveIdx.current; const p = displayLayer.points[idx]; const nextP = displayLayer.points[(idx + 1) % displayLayer.points.length]; const defaultMid = { x: (p.x + nextP.x) / 2, y: (p.y + nextP.y) / 2 }; const oldC = currentCurves[idx] || defaultMid; currentCurves[idx] = { x: oldC.x + localDx, y: oldC.y + localDy }; updateSetting(displayLayer.id, 'curves', currentCurves);
+                }
+                else {
+                    let currentPoints = [...displayLayer.points];
+                    const indicesToMove = new Set();
+                    if (draggingEdgeIdx.current !== null) { indicesToMove.add(draggingEdgeIdx.current); indicesToMove.add((draggingEdgeIdx.current + 1) % currentPoints.length); } else { indicesToMove.add(draggingPointIdx.current); selectedIndices.forEach(idx => indicesToMove.add(idx)); }
+                    indicesToMove.forEach(idx => { const p = currentPoints[idx]; const newX = (p.x || 0) + localDx; const newY = (p.y || 0) + localDy; if (!isNaN(newX) && !isNaN(newY)) { currentPoints[idx] = { x: newX, y: newY }; } });
+
+                    // Task 1: Area Lock Logic
+                    if (isAreaLocked && lockedAreaRef.current) {
+                        const newArea = Math.abs(calculatePolygonArea(currentPoints));
+                        if (newArea > 0.001) {
+                            const scaleFactor = Math.sqrt(Math.abs(lockedAreaRef.current) / newArea);
+                            const centroid = getPolygonCentroid(currentPoints);
+                            const scaled = scalePolygon(currentPoints, null, scaleFactor, centroid);
+                            currentPoints = scaled.points;
+                        }
+                    }
+
+                    updateSetting(displayLayer.id, 'points', currentPoints);
+                    if (draggingPointIdx.current !== null) { setSelectedPointForEdit({ idx: draggingPointIdx.current, point: currentPoints[draggingPointIdx.current] }); }
+                }
+                lastPos.current = { x: e.clientX, y: e.clientY };
+            };
+
+            const handlePointPointerUp = (e) => {
+                draggingPointIdx.current = null; draggingEdgeIdx.current = null; draggingCurveIdx.current = null;
+                if (e && e.target && e.target.releasePointerCapture) { e.target.releasePointerCapture(e.pointerId); }
+                if (onEditEnd && normalizedSelectedFloorId === 'base') { onEditEnd('base', displayLayer.points); }
+            };
+            const handleEdgeContextMenu = (e, idx) => { e.preventDefault(); e.stopPropagation(); const newLocked = new Set(lockedEdgeIndices); if (newLocked.has(idx)) newLocked.delete(idx); else newLocked.add(idx); setLockedEdgeIndices(newLocked); };
+            const handleEdgePointerDown = (e, idx) => { if (isRoadSelectMode && normalizedSelectedFloorId === 'base') return; longPressTimer.current = setTimeout(() => { handleSegmentEdit(idx); }, 800); if (!lockedEdgeIndices.has(idx)) return; e.stopPropagation(); e.target.setPointerCapture(e.pointerId); draggingEdgeIdx.current = idx; lastPos.current = { x: e.clientX, y: e.clientY }; dragStartPos.current = { x: e.clientX, y: e.clientY }; setSelectedPointForEdit(null); setSelectedCurveForEdit(null); };
+            const handleEdgePointerUp = () => { if (longPressTimer.current) clearTimeout(longPressTimer.current); handlePointPointerUp(); };
+
+            const handleSegmentEdit = (idx) => {
+                // Ensure we use the current display layer points (default or explicit)
+                const pts = displayLayer.points;
+                if (!pts) return;
+                const p1 = pts[idx]; const p2 = pts[(idx + 1) % pts.length]; const currentLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                const newLenStr = prompt(`目前邊長: ${currentLen.toFixed(2)}m\n請輸入新長度 (m):`, currentLen.toFixed(2));
+                if (newLenStr !== null) {
+                    const newLen = parseFloat(newLenStr);
+                    if (!isNaN(newLen) && newLen > 0) {
+                        const ratio = newLen / currentLen;
+                        const newP2 = { x: p1.x + (p2.x - p1.x) * ratio, y: p1.y + (p2.y - p1.y) * ratio };
+                        const newPoints = [...pts]; newPoints[(idx + 1) % pts.length] = newP2; updateSetting(displayLayer.id, 'points', newPoints);
+                        if (onEditEnd && normalizedSelectedFloorId === 'base') { onEditEnd('base', newPoints); }
+                    }
+                }
+            };
+
+            const handleLineClick = (e, idx1, idx2) => {
+                e.stopPropagation();
+                if (e.shiftKey) { handleSegmentEdit(idx1); return; }
+                if (normalizedSelectedFloorId === 'base') { if (isRoadSelectMode) return; if (interactionMode === 'set_back') { onUpdateEdgeTypes(idx1, 'back'); return; } if (interactionMode === 'set_side') { onUpdateEdgeTypes(idx1, 'side'); return; } }
+                const pts = [...displayLayer.points]; const p1 = pts[idx1]; const p2 = pts[idx2]; const newP = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+                const isClosing = (idx2 === 0 && idx1 === pts.length - 1); const insertIdx = isClosing ? pts.length : idx1 + 1;
+                pts.splice(insertIdx, 0, newP); updateSetting(displayLayer.id, 'points', pts);
+                if (onEditEnd && normalizedSelectedFloorId === 'base') { onEditEnd('base', pts); }
+
+                if (normalizedSelectedFloorId === 'base') {
+                    const newRoads = inputs.roads.map(r => { if (r.edgeIndex === undefined) return r; if (r.edgeIndex >= insertIdx) { return { ...r, edgeIndex: r.edgeIndex + 1 }; } return r; }); onUpdateRoads(newRoads);
+                    const newFrontage = new Set(); frontageIndices.forEach(idx => { if (idx >= insertIdx) newFrontage.add(idx + 1); else newFrontage.add(idx); }); onUpdateFrontageIndices(newFrontage);
+                    const newEdgeTypes = {}; Object.keys(edgeTypes).forEach(key => { const k = parseInt(key); const type = edgeTypes[k]; if (k >= insertIdx) newEdgeTypes[k + 1] = type; else newEdgeTypes[k] = type; });
+                    if (edgeTypes[idx1]) newEdgeTypes[insertIdx] = edgeTypes[idx1];
+                    onUpdateEdgeTypes(null, newEdgeTypes);
+                }
+            };
+
+            const handleDeletePoint = (e, idx) => { e.preventDefault(); e.stopPropagation(); const pts = [...displayLayer.points]; if (pts.length <= 3) return; pts.splice(idx, 1); updateSetting(displayLayer.id, 'points', pts); if (onEditEnd && normalizedSelectedFloorId === 'base') { onEditEnd('base', pts); } if (selectedPointForEdit?.idx === idx) setSelectedPointForEdit(null); };
+            const handlePointEdit = (axis, val) => { if (!selectedPointForEdit) return; const idx = selectedPointForEdit.idx; const pts = [...displayLayer.points]; pts[idx] = { ...pts[idx], [axis]: parseFloat(val) }; updateSetting(displayLayer.id, 'points', pts); if (onEditEnd && normalizedSelectedFloorId === 'base') { onEditEnd('base', pts); } setSelectedPointForEdit({ idx, point: pts[idx] }); };
+            const generatePath = () => { if (!displayLayer.points) return ""; const pts = displayLayer.points; const curves = displayLayer.curves || {}; let d = `M ${(pts[0].x * scale)} ${(pts[0].y * scale)}`; for (let i = 0; i < pts.length; i++) { const nextP = pts[(i + 1) % pts.length]; const curve = curves[i]; if (curve) { d += ` Q ${(curve.x * scale)} ${(curve.y * scale)}, ${(nextP.x * scale)} ${(nextP.y * scale)}`; } else { d += ` L ${(nextP.x * scale)} ${(nextP.y * scale)}`; } } d += " Z"; return d; };
+            const renderCurveHandles = () => { if (!displayLayer.points) return null; return displayLayer.points.map((p, i) => { const nextI = (i + 1) % displayLayer.points.length; const nextP = displayLayer.points[nextI]; const curve = displayLayer.curves?.[i]; const isEdgeSelected = selectedIndices.has(i) && selectedIndices.has(nextI); if (interactionMode === 'curve' || isEdgeSelected || curve) { const cpX = curve ? curve.x : (p.x + nextP.x) / 2; const cpY = curve ? curve.y : (p.y + nextP.y) / 2; return (<g key={`curve-${i}`} transform={`translate(${cpX * scale}, ${cpY * scale})`}> <line x1={(p.x - cpX) * scale} y1={(p.y - cpY) * scale} x2={0} y2={0} stroke="#93c5fd" strokeDasharray="3" strokeWidth="1" /> <line x1={(nextP.x - cpX) * scale} y1={(nextP.y - cpY) * scale} x2={0} y2={0} stroke="#93c5fd" strokeWidth="1" strokeDasharray="3" /> <circle data-type="curve-handle" r="6" fill="#f59e0b" stroke="white" strokeWidth="2" className="cursor-crosshair hover:scale-125 transition-transform" onPointerDown={(e) => { if (!curve) { const newCurves = { ...(displayLayer.curves || {}), [i]: { x: cpX, y: cpY } }; updateSetting(displayLayer.id, 'curves', newCurves); } handleCurvePointerDown(e, i); }} onPointerMove={handlePointPointerMove} onPointerUp={handlePointPointerUp} onDoubleClick={(e) => { e.stopPropagation(); const newCurves = { ...(displayLayer.curves || {}) }; delete newCurves[i]; updateSetting(displayLayer.id, 'curves', newCurves); setSelectedCurveForEdit(null); }} /> </g>) } return null; }); };
+            const baseItemScale = 80 / Math.max(baseWidthM, baseDepthM);
+
+            // --- Visualization Logic for Edge Types ---
+            const vizPrimaryIndices = new Set();
+            const vizSecondaryIndices = new Set();
+            if (inputs.roads) {
+                inputs.roads.forEach(r => {
+                    const indices = new Set();
+                    if (r.edgeIndices) r.edgeIndices.forEach(i => indices.add(i));
+                    if (r.edgeIndex !== undefined && r.edgeIndex !== "") indices.add(parseInt(r.edgeIndex));
+                    if (r.type === 'primary') indices.forEach(i => vizPrimaryIndices.add(i));
+                    else indices.forEach(i => vizSecondaryIndices.add(i));
+                });
+            }
+            const vizFrontIndices = new Set();
+            if (frontageIndices && frontageIndices.size > 0) {
+                frontageIndices.forEach(i => vizFrontIndices.add(i));
+            } else {
+                vizPrimaryIndices.forEach(i => vizFrontIndices.add(i));
+                if (vizPrimaryIndices.size === 0 && vizSecondaryIndices.size > 0) vizSecondaryIndices.forEach(i => vizFrontIndices.add(i));
+            }
+            const vizCombinedEdgeTypes = { ...edgeTypes };
+            vizSecondaryIndices.forEach(idx => {
+                if (!vizFrontIndices.has(idx) && !vizCombinedEdgeTypes[idx]) {
+                    vizCombinedEdgeTypes[idx] = 'side';
+                }
+            });
+
+            // Calculate Setback Polygon for Visualization
+            const setbackPoly = useMemo(() => {
+                // Always use currentBasePoints (which is either explicit or default rect) for visualization
+                const pts = selectedFloorId === 'base' ? currentBasePoints : basePoints;
+
+                if (selectedFloorId === 'base' && pts) {
+                    const front = parseFloat(inputs.frontYardDepth || 0);
+                    const back = parseFloat(inputs.backYardDepth || 0);
+                    const side = parseFloat(inputs.sideYardDepth || 0);
+                    const res = offsetPolygon(pts, vizCombinedEdgeTypes, { front, back, side }, vizFrontIndices, baseCurves);
+                    return res ? res.points : null;
+                }
+                return null;
+            }, [selectedFloorId, basePoints, currentBasePoints, baseCurves, vizCombinedEdgeTypes, vizFrontIndices, inputs.frontYardDepth, inputs.backYardDepth, inputs.sideYardDepth]);
+            // ------------------------------------------
+
+            const regionPaths = useMemo(() => {
+                if (selectedFloorId !== 'base' || !currentBasePoints || currentBasePoints.length < 3) return { paths: [], labels: [] };
+                const { points: densePoints, edgeMap } = discretizePolygon(currentBasePoints, baseCurves, 15);
+                if (!densePoints || densePoints.length < 2) return { paths: [], labels: [] };
+                const centroid = getPolygonCentroid(densePoints);
+                const frontDepth = parseFloat(inputs.frontYardDepth || 0);
+                const backDepth = parseFloat(inputs.backYardDepth || 0);
+                const sideDepth = parseFloat(inputs.sideYardDepth || 0);
+                const arcadeDepth = (inputs.frontYardDepth == 0 && inputs.arcadeDepth) ? parseFloat(inputs.arcadeDepth) : 0;
+                const combinedEdgeTypes = { ...vizCombinedEdgeTypes };
+                const hasExplicitBack = Object.values(combinedEdgeTypes).includes('back');
+                const hasExplicitSide = Object.values(combinedEdgeTypes).includes('side');
+                let frontNormal = { x: 0, y: 0 };
+                let frontCount = 0;
+                densePoints.forEach((p, i) => {
+                    const origIdx = edgeMap[i];
+                    if (vizFrontIndices.has(origIdx)) {
+                        const p2 = densePoints[(i + 1) % densePoints.length];
+                        const n = getSegmentNormal(p, p2, centroid);
+                        frontNormal.x += n.x;
+                        frontNormal.y += n.y;
+                        frontCount++;
+                    }
+                });
+                if (frontCount > 0) {
+                    const len = Math.hypot(frontNormal.x, frontNormal.y);
+                    if (len > 0) { frontNormal.x /= len; frontNormal.y /= len; }
+                    if (!hasExplicitBack) {
+                        densePoints.forEach((p, i) => {
+                            const origIdx = edgeMap[i];
+                            if (vizFrontIndices.has(origIdx) || combinedEdgeTypes[origIdx]) return;
+                            const p2 = densePoints[(i + 1) % densePoints.length];
+                            const n = getSegmentNormal(p, p2, centroid);
+                            const dot = n.x * frontNormal.x + n.y * frontNormal.y;
+                            if (dot < -0.5) combinedEdgeTypes[origIdx] = 'back';
+                        });
+                    }
+                    if (!hasExplicitSide && sideDepth > 0) {
+                        const desiredSign = (inputs.sideYardDirection || 'right') === 'left' ? 1 : -1;
+                        const candidates = [];
+                        densePoints.forEach((p, i) => {
+                            const origIdx = edgeMap[i];
+                            if (vizFrontIndices.has(origIdx) || combinedEdgeTypes[origIdx]) return;
+                            const p2 = densePoints[(i + 1) % densePoints.length];
+                            const n = getSegmentNormal(p, p2, centroid);
+                            const dot = n.x * frontNormal.x + n.y * frontNormal.y;
+                            const cross = frontNormal.x * n.y - frontNormal.y * n.x;
+                            candidates.push({ origIdx, dot, cross });
+                        });
+                        let selected = candidates.filter(c => Math.abs(c.dot) < 0.3 && desiredSign * c.cross > 0);
+                        if (selected.length === 0) {
+                            selected = candidates.filter(c => desiredSign * c.cross > 0).sort((a, b) => Math.abs(a.dot) - Math.abs(b.dot));
+                        }
+                        selected.forEach(c => { combinedEdgeTypes[c.origIdx] = 'side'; });
+                    }
+                }
+                if (sideDepth > 0 && !Object.values(combinedEdgeTypes).includes('side')) {
+                    for (let idx = 0; idx < currentBasePoints.length; idx++) {
+                        if (!vizFrontIndices.has(idx) && !combinedEdgeTypes[idx]) {
+                            combinedEdgeTypes[idx] = 'side';
+                        }
+                    }
+                }
+                const getDepthByType = (type) => {
+                    if (type === 'front') return arcadeDepth > 0 ? arcadeDepth : frontDepth;
+                    if (type === 'back') return backDepth;
+                    if (type === 'side') return sideDepth;
+                    return 0;
+                };
+                const getRegionType = (origIdx) => {
+                    if (vizFrontIndices.has(origIdx)) return 'front';
+                    if (combinedEdgeTypes[origIdx] === 'back') return 'back';
+                    if (combinedEdgeTypes[origIdx] === 'side') return 'side';
+                    return null;
+                };
+                const buildOffsetPoints = (activeType) => {
+                    const shiftedLines = [];
+                    for (let i = 0; i < densePoints.length; i++) {
+                        const p1 = densePoints[i];
+                        const p2 = densePoints[(i + 1) % densePoints.length];
+                        const origIdx = edgeMap[i];
+                        const regionType = getRegionType(origIdx);
+                        const depth = regionType === activeType ? getDepthByType(regionType) : 0;
+                        const n = getSegmentNormal(p1, p2, centroid);
+                        shiftedLines.push({
+                            p1: { x: p1.x + n.x * depth, y: p1.y + n.y * depth },
+                            p2: { x: p2.x + n.x * depth, y: p2.y + n.y * depth }
+                        });
+                    }
+                    const newPoints = [];
+                    for (let i = 0; i < shiftedLines.length; i++) {
+                        const l1 = shiftedLines[i];
+                        const l2 = shiftedLines[(i + 1) % shiftedLines.length];
+                        const intersect = getLineIntersection(l1.p1, l1.p2, l2.p1, l2.p2);
+                        newPoints.push(intersect || l1.p2);
+                    }
+                    return newPoints;
+                };
+                const buildRingPath = (innerPts) => {
+                    if (!innerPts || innerPts.length < 3) return null;
+                    let dPath = "";
+                    densePoints.forEach((p, i) => {
+                        const x = p.x * scale;
+                        const y = p.y * scale;
+                        if (i === 0) dPath += `M ${x} ${y}`;
+                        else dPath += ` L ${x} ${y}`;
+                    });
+                    dPath += " Z";
+                    const inner = [...innerPts].reverse();
+                    inner.forEach((p, i) => {
+                        const x = p.x * scale;
+                        const y = p.y * scale;
+                        if (i === 0) dPath += ` M ${x} ${y}`;
+                        else dPath += ` L ${x} ${y}`;
+                    });
+                    dPath += " Z";
+                    return dPath;
+                };
+                const regionTypes = ['front', 'back', 'side'];
+                const paths = [];
+                regionTypes.forEach(type => {
+                    const depth = getDepthByType(type);
+                    if (depth <= 0) return;
+                    let hasEdge = false;
+                    for (let i = 0; i < edgeMap.length; i++) {
+                        if (getRegionType(edgeMap[i]) === type) { hasEdge = true; break; }
+                    }
+                    if (!hasEdge) return;
+                    const innerPts = buildOffsetPoints(type);
+                    const dPath = buildRingPath(innerPts);
+                    if (dPath) paths.push({ d: dPath, type });
+                });
+                const labels = [];
+                const labelByType = { front: arcadeDepth > 0 ? "騎樓" : "前院", back: "後院", side: "側院" };
+                const segmentsByOrig = new globalThis.Map();
+                for (let i = 0; i < edgeMap.length; i++) {
+                    const orig = edgeMap[i];
+                    if (!segmentsByOrig.has(orig)) segmentsByOrig.set(orig, []);
+                    segmentsByOrig.get(orig).push(i);
+                }
+                segmentsByOrig.forEach((segments, origIdx) => {
+                    const regionType = getRegionType(origIdx);
+                    if (!regionType) return;
+                    const depth = getDepthByType(regionType);
+                    if (depth <= 0) return;
+                    const midSeg = segments[Math.floor(segments.length / 2)];
+                    const p1 = densePoints[midSeg];
+                    const p2 = densePoints[(midSeg + 1) % densePoints.length];
+                    if (!p1 || !p2) return;
+                    const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+                    const n = getSegmentNormal(p1, p2, centroid);
+                    labels.push({
+                        x: mid.x + n.x * depth * 0.5,
+                        y: mid.y + n.y * depth * 0.5,
+                        text: labelByType[regionType],
+                        type: regionType,
+                        key: `${regionType}-${origIdx}`
+                    });
+                });
+                return { paths, labels };
+            }, [selectedFloorId, currentBasePoints, baseCurves, vizFrontIndices, vizCombinedEdgeTypes, inputs.frontYardDepth, inputs.backYardDepth, inputs.sideYardDepth, inputs.sideYardDirection, inputs.arcadeDepth, scale]);
+
+            return (
+                <div className="w-full h-full flex flex-col relative overflow-hidden theme-bg" ref={containerRef} onPointerDown={(e) => { e.stopPropagation(); handlePanStart(e); }} onClick={(e) => e.stopPropagation()}>
+                    {displayLayer && (
+                        <div className="absolute top-16 left-4 z-50 flex gap-3">
+                            <button onClick={onClose} className="p-3 bg-white border-2 border-black shadow-[4px_4px_0_#000] hover:bg-black hover:text-white transition-all" title="Exit Edit"> <Undo2 size={24} strokeWidth={3} /> </button>
+                            {normalizedSelectedFloorId !== 'base' && normalizedSelectedFloorId !== 'excavation' && (
+                                <button onClick={() => onUpdateUnitSettings(prev => ({ ...prev, enabled: !prev.enabled, target: normalizedSelectedFloorId }))} className={`flex items-center gap-2 px-4 py-2 border-2 border-black shadow-[4px_4px_0_#000] transition-all ${unitSettings?.enabled ? 'bg-black text-white' : 'bg-white text-black hover:bg-[var(--text-accent)]'}`} title="Unit Split">
+                                    <LayoutDashboard size={18} strokeWidth={3} />
+                                    <span className="text-xs font-black uppercase tracking-widest">SPLIT</span>
+                                </button>
+                            )}
+                        </div>
+                    )}
+                    {unitSettings?.enabled && displayLayer && (
+                        <div className="absolute top-32 left-4 z-50 bg-white border-4 border-black p-5 shadow-[8px_8px_0_#000] w-72">
+                            <h3 className="font-black text-sm uppercase tracking-tighter mb-4 border-b-2 border-black pb-1">SPLIT CONFIG ({displayLayer.id})</h3>
+                            <div className="mb-2">
+                                <label className="text-xs text-stone-500 block">分戶方式</label>
+                                <div className="flex gap-2 mt-1">
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, mode: 'ratio' }))} className={`flex-1 text-xs py-1 border rounded ${unitSettings.mode === 'ratio' ? 'bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-stone-50'}`}>比例</button>
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, mode: 'count' }))} className={`flex-1 text-xs py-1 border rounded ${unitSettings.mode === 'count' ? 'bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-stone-50'}`}>戶數</button>
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, mode: 'area' }))} className={`flex-1 text-xs py-1 border rounded ${unitSettings.mode === 'area' ? 'bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-stone-50'}`}>每戶坪</button>
+                                </div>
+                            </div>
+                            <div className="mb-2">
+                                <label className="text-xs text-stone-500 block">分割方向</label>
+                                <div className="flex gap-2 mt-1">
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, axis: 'x' }))} className={`flex-1 text-xs py-1 border rounded ${unitSettings.axis === 'x' ? 'bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-stone-50'}`}>垂直 (X)</button>
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, axis: 'y' }))} className={`flex-1 text-xs py-1 border rounded ${unitSettings.axis === 'y' ? 'bg-indigo-50 border-indigo-500 text-indigo-600' : 'bg-stone-50'}`}>水平 (Y)</button>
+                                </div>
+                            </div>
+                            {unitSettings.mode === 'ratio' && (
+                                <div className="mb-2">
+                                    <label className="text-xs text-stone-500 block">分割比例 ({Math.round(unitSettings.ratio * 100)}:{Math.round((1 - unitSettings.ratio) * 100)})</label>
+                                    <input type="range" min="0.1" max="0.9" step="0.05" value={unitSettings.ratio} onChange={(e) => onUpdateUnitSettings(p => ({ ...p, ratio: parseFloat(e.target.value) }))} className="w-full" />
+                                </div>
+                            )}
+                            {unitSettings.mode === 'count' && (
+                                <div className="mb-2">
+                                    <label className="text-xs text-stone-500 block">戶數</label>
+                                    <input type="number" min="1" step="1" value={unitSettings.count} onChange={(e) => onUpdateUnitSettings(p => ({ ...p, count: Math.max(1, parseInt(e.target.value || '1')) }))} className="w-full text-xs p-1 border rounded" />
+                                </div>
+                            )}
+                            {unitSettings.mode === 'area' && (
+                                <div className="mb-2">
+                                    <label className="text-xs text-stone-500 block">每戶面積 (坪)</label>
+                                    <input type="number" min="0.5" step="0.5" value={unitSettings.areaPerUnit} onChange={(e) => onUpdateUnitSettings(p => ({ ...p, areaPerUnit: Math.max(0.5, parseFloat(e.target.value || '0.5')) }))} className="w-full text-xs p-1 border rounded" />
+                                    <div className="text-[10px] text-stone-400 mt-1">預估戶數: {Math.max(1, Math.round(toPing(calculatePolygonArea(displayLayer.points || [], displayLayer.curves)) / Math.max(0.5, unitSettings.areaPerUnit || 0.5)))}</div>
+                                </div>
+                            )}
+                            <div className="mb-4">
+                                <label className="text-xs text-stone-500 block">棟距 (Gap): {unitSettings.gap}m (依法規退縮範圍切割)</label>
+                                <input type="range" min="0" max="5" step="0.1" value={unitSettings.gap} onChange={(e) => onUpdateUnitSettings(p => ({ ...p, gap: parseFloat(e.target.value) }))} className="w-full" />
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => {
+                                    const allowedPts = displayLayer.allowedPoints || displayLayer.unsplitPoints || displayLayer.points;
+                                    const allowedCurvs = displayLayer.allowedCurves || displayLayer.unsplitCurves || displayLayer.curves || null;
+                                    const units = getSplitUnits(displayLayer.points, unitSettings, displayLayer.curves, allowedPts, allowedCurvs);
+                                    onUpdateSetting(displayLayer.id, 'unitConfig', {
+                                        mode: unitSettings.mode || 'ratio',
+                                        axis: unitSettings.axis || 'x',
+                                        ratio: unitSettings.ratio ?? 0.5,
+                                        count: unitSettings.count ?? 2,
+                                        areaPerUnit: unitSettings.areaPerUnit ?? 25,
+                                        gap: unitSettings.gap ?? 0
+                                    });
+                                    updateSetting(displayLayer.id, 'units', units);
+                                    onUpdateUnitSettings(prev => ({ ...prev, enabled: false }));
+                                }} className="flex-1 bg-black text-white text-xs font-black py-2 hover:bg-[var(--text-accent)] hover:text-black border-2 border-black transition-colors">CONFIRM</button>
+                                {savedUnits && savedUnits.length > 0 && (
+                                    <button onClick={() => {
+                                        onUpdateSetting(displayLayer.id, 'units', null);
+                                        onUpdateSetting(displayLayer.id, 'unitConfig', null);
+                                        onUpdateUnitSettings(prev => ({ ...prev, enabled: false }));
+                                    }} className="px-2 bg-red-50 text-red-600 text-xs font-black py-2 hover:bg-red-600 hover:text-white border-2 border-red-600 transition-colors">取消分戶</button>
+                                )}
+                                <button onClick={() => onUpdateUnitSettings(prev => ({ ...prev, enabled: false }))} className="flex-1 bg-white text-black text-xs font-black py-2 hover:bg-stone-100 border-2 border-black transition-colors">CANCEL</button>
+                            </div>
+                        </div>
+                    )}
+                    {!displayLayer && (
+                        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 flex gap-4">
+                            <div className="flex bg-white border-2 border-black shadow-[4px_4px_0_#000] overflow-hidden items-center group">
+                                <button
+                                    onClick={() => {
+                                        setFloorConfig({ above: Math.max(1, parseInt(floorsAboveValue || '1')), below: Math.max(0, parseInt(inputs.floorsBelow || '0')) });
+                                        setShowFloorDialog(true);
+                                    }}
+                                    className="px-4 py-2 text-xs font-black theme-text hover:bg-black hover:text-white flex items-center gap-2 transition-colors"
+                                    title="Floor Config">
+                                    <Layers size={14} strokeWidth={3} />
+                                    <span className="uppercase tracking-widest">FLOORS</span>
+                                </button>
+                            </div>
+                            <div className="flex bg-white border-2 border-black shadow-[4px_4px_0_#000] overflow-hidden items-center group">
+                                <button
+                                    onClick={() => {
+                                        const firstFloorGroup = (groupedLayers || []).find(g => g.id !== 'base' && g.id !== 'excavation');
+                                        const cleanTarget = unitSettings?.target ? unitSettings.target.split('-')[0] : null;
+                                        onUpdateUnitSettings(prev => ({ ...prev, enabled: !prev.enabled, target: cleanTarget || (firstFloorGroup ? firstFloorGroup.id : '1F') }));
+                                    }}
+                                    className={`px-4 py-2 text-xs font-black border-none transition-colors flex items-center gap-2 ${unitSettings?.enabled ? 'bg-black text-white' : 'text-black hover:bg-black hover:text-white'}`}
+                                    title="Unit Split">
+                                    <LayoutDashboard size={14} strokeWidth={3} />
+                                    <span className="uppercase tracking-widest">SPLIT</span>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    {showFloorDialog && (
+                        <div className="fixed inset-0 z-[60] flex items-center justify-center">
+                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowFloorDialog(false)}></div>
+                            <div className="relative bg-white border-4 border-black shadow-[12px_12px_0_#000] w-72 p-6 z-10">
+                                <h3 className="font-black text-sm uppercase tracking-tighter mb-4 border-b-2 border-black pb-1">FLOOR CONFIG</h3>
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[10px] font-black uppercase text-stone-400">ABOVE GROUND</span>
+                                        <input type="number" min="1" value={floorConfig.above} onChange={(e) => setFloorConfig(fc => ({ ...fc, above: Math.max(1, parseInt(e.target.value || '1')) }))} className="w-16 p-1 text-right border-2 border-black font-black outline-none focus:bg-black focus:text-white" />
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[10px] font-black uppercase text-stone-400">BASEMENT</span>
+                                        <input type="number" min="0" value={floorConfig.below} onChange={(e) => setFloorConfig(fc => ({ ...fc, below: Math.max(0, parseInt(e.target.value || '0')) }))} className="w-16 p-1 text-right border-2 border-black font-black outline-none focus:bg-black focus:text-white" />
+                                    </div>
+                                </div>
+                                <div className="mt-6 flex gap-3">
+                                    <button
+                                        onClick={() => {
+                                            onUpdateFloorsAbove && onUpdateFloorsAbove(floorConfig.above);
+                                            onUpdateInputs && onUpdateInputs('floorsBelow', floorConfig.below);
+                                            setShowFloorDialog(false);
+                                        }}
+                                        className="flex-1 bg-black text-white text-xs font-black py-2 hover:bg-[var(--text-accent)] hover:text-black border-2 border-black transition-colors">
+                                        APPLY
+                                    </button>
+                                    <button onClick={() => setShowFloorDialog(false)} className="flex-1 bg-white text-black text-xs font-black py-2 hover:bg-stone-100 border-2 border-black transition-colors">CANCEL</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    {showApplyAllDialog && displayLayer && (
+                        <div className="fixed inset-0 z-[70] flex items-center justify-center">
+                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowApplyAllDialog(false)}></div>
+                            <div className="relative bg-white border-4 border-black shadow-[12px_12px_0_#000] w-80 p-6 z-10 space-y-4">
+                                <h3 className="font-black text-base uppercase tracking-tighter border-b-2 border-black pb-2 flex items-center gap-2">
+                                    <AlertTriangle size={18} className="text-amber-500" />
+                                    確認全部套用樓板 (APPLY TO ALL)
+                                </h3>
+                                <p className="text-xs font-bold text-stone-700 leading-relaxed">
+                                    確定要將目前 <span className="font-black text-black">{displayLayer.id}</span> 的樓板形狀{savedUnits && savedUnits.length > 0 ? '與戶型分割設定' : ''}套用至所有地上樓層嗎？
+                                    <br />
+                                    <span className="text-stone-500 font-normal mt-1 block">套用後系統會依總容積重新計算樓層數，且各樓層仍可單獨點擊進入修改形狀或重新調整分戶。</span>
+                                </p>
+                                <div className="flex gap-3 pt-2">
+                                    <button
+                                        onClick={() => {
+                                            const offset = floorSettings?.[displayLayer.id]?.offset || { x: 0, y: 0 };
+                                            const currentUnits = savedUnits || floorSettings?.[displayLayer.id]?.units || null;
+                                            const currentUnitConfig = floorSettings?.[displayLayer.id]?.unitConfig || null;
+                                            let payload = {};
+                                            if (displayLayer.points && displayLayer.points.length >= 3) {
+                                                const area = calculatePolygonArea(displayLayer.points, displayLayer.curves);
+                                                payload = { mode: 'polygon', points: displayLayer.points, curves: displayLayer.curves || null, area, offset, units: currentUnits, unitConfig: currentUnitConfig };
+                                            } else {
+                                                const w = displayLayer.realWidth || baseWidthM;
+                                                const h = displayLayer.realDepth || baseDepthM;
+                                                payload = { mode: 'box', width: w, depth: h, area: (w * h), offset, units: currentUnits, unitConfig: currentUnitConfig };
+                                            }
+                                            setShowApplyAllDialog(false);
+                                            onApplyAll && onApplyAll(payload);
+                                        }}
+                                        className="flex-1 bg-black text-white text-xs font-black py-2.5 hover:bg-[var(--text-accent)] hover:text-black border-2 border-black transition-colors"
+                                    >
+                                        確認全部套用
+                                    </button>
+                                    <button
+                                        onClick={() => setShowApplyAllDialog(false)}
+                                        className="flex-1 bg-white text-black text-xs font-black py-2.5 hover:bg-stone-100 border-2 border-black transition-colors"
+                                    >
+                                        取消
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    {unitSettings?.enabled && !displayLayer && (
+                        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-50 bg-white border-4 border-black p-6 shadow-[12px_12px_0_#000] w-80 backdrop-blur-md">
+                            <h3 className="font-black text-sm uppercase tracking-tighter mb-4 border-b-2 border-black pb-1">GLOBAL SPLIT CONFIG</h3>
+                            <div className="mb-3">
+                                <label className="text-[10px] font-black uppercase text-stone-400 block mb-1">TARGET FLOOR</label>
+                                <select
+                                    value={(unitSettings.target || '').split('-')[0]}
+                                    onChange={(e) => onUpdateUnitSettings(p => ({ ...p, target: e.target.value }))}
+                                    className="w-full text-xs p-2 border-2 border-black bg-white font-black outline-none focus:bg-black focus:text-white">
+                                    {(groupedLayers || []).filter(g => g.id !== 'base' && g.id !== 'excavation').map(g => (
+                                        <option key={g.id} value={g.id}>{g.id}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="mb-3">
+                                <label className="text-[10px] font-black uppercase text-stone-400 block mb-1">SPLIT MODE</label>
+                                <div className="flex gap-2">
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, mode: 'ratio' }))} className={`flex-1 text-[10px] font-black uppercase py-1.5 border-2 border-black transition-colors ${unitSettings.mode === 'ratio' ? 'bg-black text-white' : 'bg-white text-black hover:bg-stone-100'}`}>RATIO</button>
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, mode: 'count' }))} className={`flex-1 text-[10px] font-black uppercase py-1.5 border-2 border-black transition-colors ${unitSettings.mode === 'count' ? 'bg-black text-white' : 'bg-white text-black hover:bg-stone-100'}`}>COUNT</button>
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, mode: 'area' }))} className={`flex-1 text-[10px] font-black uppercase py-1.5 border-2 border-black transition-colors ${unitSettings.mode === 'area' ? 'bg-black text-white' : 'bg-white text-black hover:bg-stone-100'}`}>AREA</button>
+                                </div>
+                            </div>
+                            <div className="mb-3">
+                                <label className="text-[10px] font-black uppercase text-stone-400 block mb-1">DIRECTION</label>
+                                <div className="flex gap-2">
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, axis: 'x' }))} className={`flex-1 text-[10px] font-black uppercase py-1.5 border-2 border-black transition-colors ${unitSettings.axis === 'x' ? 'bg-black text-white' : 'bg-white text-black hover:bg-stone-100'}`}>VERTICAL</button>
+                                    <button onClick={() => onUpdateUnitSettings(p => ({ ...p, axis: 'y' }))} className={`flex-1 text-[10px] font-black uppercase py-1.5 border-2 border-black transition-colors ${unitSettings.axis === 'y' ? 'bg-black text-white' : 'bg-white text-black hover:bg-stone-100'}`}>HORIZONTAL</button>
+                                </div>
+                            </div>
+                            {unitSettings.mode === 'ratio' && (
+                                <div className="mb-3">
+                                    <label className="text-[10px] font-black uppercase text-stone-400 block mb-1">RATIO ({Math.round(unitSettings.ratio * 100)}:{Math.round((1 - unitSettings.ratio) * 100)})</label>
+                                    <input type="range" min="0.1" max="0.9" step="0.05" value={unitSettings.ratio} onChange={(e) => onUpdateUnitSettings(p => ({ ...p, ratio: parseFloat(e.target.value) }))} className="w-full accent-black" />
+                                </div>
+                            )}
+                            {unitSettings.mode === 'count' && (
+                                <div className="mb-3">
+                                    <label className="text-[10px] font-black uppercase text-stone-400 block mb-1">COUNT</label>
+                                    <input type="number" min="1" step="1" value={unitSettings.count} onChange={(e) => onUpdateUnitSettings(p => ({ ...p, count: Math.max(1, parseInt(e.target.value || '1')) }))} className="w-full p-2 border-2 border-black font-black outline-none focus:bg-black focus:text-white" />
+                                </div>
+                            )}
+                            {unitSettings.mode === 'area' && (
+                                <div className="mb-3">
+                                    <label className="text-[10px] font-black uppercase text-stone-400 block mb-1">AREA PER UNIT (P)</label>
+                                    <input type="number" min="0.5" step="0.5" value={unitSettings.areaPerUnit} onChange={(e) => onUpdateUnitSettings(p => ({ ...p, areaPerUnit: Math.max(0.5, parseFloat(e.target.value || '0.5')) }))} className="w-full p-2 border-2 border-black font-black outline-none focus:bg-black focus:text-white" />
+                                    <div className="text-[9px] font-black uppercase text-stone-500 mt-1">
+                                        {(() => {
+                                            const tId = (unitSettings.target || '1F').split('-')[0];
+                                            const splitLayer = (layers || []).find(l => l.id === tId || l.id.startsWith(`${tId}-`));
+                                            const basePts = splitLayer?.unsplitPoints || splitLayer?.points || null;
+                                            const baseCurvs = splitLayer?.unsplitCurves || splitLayer?.curves || null;
+                                            const area = basePts ? calculatePolygonArea(basePts, baseCurvs) : (splitLayer ? (splitLayer.realWidth || 0) * (splitLayer.realDepth || 0) : 0);
+                                            const per = Math.max(0.5, unitSettings.areaPerUnit || 0.5);
+                                            const est = area > 0 ? Math.max(1, Math.round(toPing(area) / per)) : 1;
+                                            return `EST. UNITS: ${est}`;
+                                        })()}
+                                    </div>
+                                </div>
+                            )}
+                            <div className="mb-6">
+                                <label className="text-[10px] font-black uppercase text-stone-400 block mb-1">Gap: {unitSettings.gap}m (依法規退縮範圍切割)</label>
+                                <input type="range" min="0" max="5" step="0.1" value={unitSettings.gap} onChange={(e) => onUpdateUnitSettings(p => ({ ...p, gap: parseFloat(e.target.value) }))} className="w-full accent-black" />
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => {
+                                    const tId = (unitSettings.target || '1F').split('-')[0];
+                                    const splitLayer = (layers || []).find(l => l.id === tId || l.id.startsWith(`${tId}-`));
+                                    if (!splitLayer) return;
+                                    const basePts = splitLayer.unsplitPoints || splitLayer.points;
+                                    const baseCurvs = splitLayer.unsplitCurves || splitLayer.curves || null;
+                                    const allowedPts = splitLayer.allowedPoints || basePts;
+                                    const allowedCurvs = splitLayer.allowedCurves || baseCurvs;
+                                    if (!basePts) return;
+                                    const units = getSplitUnits(basePts, unitSettings, baseCurvs, allowedPts, allowedCurvs);
+                                    const worldUnits = Array.isArray(units) ? units.map(uPts => toWorldFloorPoints(uPts)) : units;
+                                    onUpdateSetting(tId, 'unitConfig', {
+                                        mode: unitSettings.mode || 'ratio',
+                                        axis: unitSettings.axis || 'x',
+                                        ratio: unitSettings.ratio ?? 0.5,
+                                        count: unitSettings.count ?? 2,
+                                        areaPerUnit: unitSettings.areaPerUnit ?? 25,
+                                        gap: unitSettings.gap ?? 0
+                                    });
+                                    onUpdateSetting(tId, 'units', worldUnits);
+                                    onUpdateUnitSettings(prev => ({ ...prev, enabled: false }));
+                                }} className="flex-1 bg-black text-white text-xs font-black py-2.5 hover:bg-[var(--text-accent)] hover:text-black border-2 border-black transition-colors">CONFIRM</button>
+                                {(floorSettings?.[(unitSettings.target || '1F').split('-')[0]]?.units || floorSettings?.[(unitSettings.target || '1F').split('-')[0]]?.unitConfig) && (
+                                    <button onClick={() => {
+                                        const tId = (unitSettings.target || '1F').split('-')[0];
+                                        onUpdateSetting(tId, 'units', null);
+                                        onUpdateSetting(tId, 'unitConfig', null);
+                                        onUpdateUnitSettings(prev => ({ ...prev, enabled: false }));
+                                    }} className="px-2 bg-red-50 text-red-600 text-xs font-black py-2.5 hover:bg-red-600 hover:text-white border-2 border-red-600 transition-colors">取消分戶</button>
+                                )}
+                                <button onClick={() => onUpdateUnitSettings(prev => ({ ...prev, enabled: false }))} className="flex-1 bg-white text-black text-xs font-black py-2.5 hover:bg-stone-100 border-2 border-black transition-colors">CANCEL</button>
+                            </div>
+                        </div>
+                    )}
+                    {displayLayer ? (
+                        <>
+                            {normalizedSelectedFloorId !== 'base' && normalizedSelectedFloorId !== 'excavation' && (
+                                <div className="absolute top-32 left-4 z-40 flex gap-2 pointer-events-auto">
+                                    <button
+                                        onClick={() => setShowApplyAllDialog(true)}
+                                        className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest bg-black text-white border-2 border-black shadow-[4px_4px_0_#fff] hover:bg-[var(--text-accent)] hover:text-black transition-all`}
+                                        title="將目前樓板形狀與面積一鍵套用至所有地上樓層，並自動依總樓地板面積調整樓層數量"
+                                    >
+                                        APPLY TO ALL
+                                    </button>
+                                </div>
+                            )}
+                            <div className={`flex-1 flex items-center justify-center p-0 transition-all duration-300 overflow-hidden cursor-pan ${isPanning ? 'cursor-grabbing' : ''}`} onWheel={onWheel} onPointerDown={handlePanStart} onPointerMove={handlePanMove} onPointerUp={handlePanEnd} onPointerLeave={handlePanEnd} onTouchStart={handleTouchPanStart} onTouchMove={handleTouchPanMove} onTouchEnd={handleTouchPanEnd} onTouchCancel={handleTouchPanEnd}>
+                                {selectedPointForEdit && (<CoordinatePopup point={selectedPointForEdit.point} idx={selectedPointForEdit.idx} onChange={handlePointEdit} scale={view.k} isDarkMode={isDarkMode} />)}
+                                <div className="relative pointer-events-none" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`, transformOrigin: 'center', transition: isPanning ? 'none' : 'transform 0.1s' }}>
+                                    <svg width={baseW + 400} height={baseH + 400} viewBox={`-${baseW / 2 + 200} -${baseH / 2 + 200} ${baseW + 400} ${baseH + 400}`} className="overflow-visible shadow-[12px_12px_0_#000] bg-white border-4 border-black pointer-events-auto">
+                                        <rect id="bg-rect" x={-baseW / 2 - 200} y={-baseH / 2 - 200} width={baseW + 400} height={baseH + 400} fill="transparent" />
+                                        {/* Background Layer: Use currentBasePoints (Explicit or Default Rect) */}
+                                        {normalizedSelectedFloorId !== 'base' && (
+                                            <path d={generateSvgPath(currentBasePoints, baseCurves, scale)} fill={isDarkMode ? "#1e293b" : "#f5f5f4"} stroke={isDarkMode ? "#475569" : "#d6d3d1"} strokeWidth="1" />
+                                        )}
+
+                                        {normalizedSelectedFloorId !== 'excavation' && normalizedSelectedFloorId !== 'base' && excavationPoints && (<path d={generateSvgPath(excavationPoints, excavationCurves, scale)} fill="none" stroke="#f59e0b" strokeWidth="1" strokeDasharray="4,4" opacity="0.5" />)}
+                                        <g transform={`translate(${xPos}, ${yPos}) rotate(${displayLayer.rotation || 0})`} className="cursor-move" onPointerDown={handleDragStart} onPointerMove={handleDragMove} onPointerUp={handleDragEnd}>
+                                            {normalizedSelectedFloorId === 'base' && regionPaths.paths.length > 0 && (
+                                                <g pointerEvents="none">
+                                                    {regionPaths.paths.map((path, idx) => {
+                                                        const isBackMode = interactionMode === 'set_back';
+                                                        const isSideMode = interactionMode === 'set_side';
+                                                        let opacity = 0.18;
+                                                        if (isBackMode) opacity = path.type === 'back' ? 0.32 : 0.06;
+                                                        else if (isSideMode) opacity = path.type === 'side' ? 0.32 : 0.06;
+                                                        const colorMap = path.type === 'front'
+                                                            ? { fill: "#ef4444", stroke: "#ef4444" }
+                                                            : path.type === 'back'
+                                                                ? { fill: "#10b981", stroke: "#10b981" }
+                                                                : { fill: "#3b82f6", stroke: "#3b82f6" };
+                                                        return (
+                                                            <path key={`region-path-${idx}-${path.type}`} d={path.d} fill={colorMap.fill} fillOpacity={opacity} stroke={colorMap.stroke} strokeWidth="1" />
+                                                        );
+                                                    })}
+                                                    {regionPaths.labels.map(label => {
+                                                        const isBackMode = interactionMode === 'set_back';
+                                                        const isSideMode = interactionMode === 'set_side';
+                                                        let opacity = 0.7;
+                                                        if (isBackMode) opacity = label.type === 'back' ? 0.9 : 0.3;
+                                                        else if (isSideMode) opacity = label.type === 'side' ? 0.9 : 0.3;
+                                                        const colorMap = label.type === 'front'
+                                                            ? { fill: "#ef4444" }
+                                                            : label.type === 'back'
+                                                                ? { fill: "#10b981" }
+                                                                : { fill: "#3b82f6" };
+                                                        return (
+                                                            <text key={label.key} x={label.x * scale} y={label.y * scale} textAnchor="middle" dominantBaseline="middle" fontSize="10" fill={colorMap.fill} opacity={opacity} className="select-none">
+                                                                {label.text}
+                                                            </text>
+                                                        );
+                                                    })}
+                                                </g>
+                                            )}
+                                            {displayLayer.points ? (
+                                                <>
+                                                    {previewUnits ? (
+                                                        previewUnits.map((pts, i) => (
+                                                            <path key={`preview-${i}`} d={generateSvgPath(pts, null, scale)} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
+                                                        ))
+                                                    ) : unitsToRender ? (
+                                                        <>
+                                                            <path d={generatePath()} fill="none" stroke={displayLayer.isViolation ? "#ef4444" : (normalizedSelectedFloorId === 'base' ? "#78716c" : "#0284c7")} strokeWidth="2" opacity="0.7" />
+                                                            {unitsToRender.map((pts, i) => {
+                                                                const centroid = getPolygonCentroid(pts);
+                                                                const fillOpacity = Math.min(0.85, 0.55 + i * 0.1);
+                                                                return (
+                                                                    <g key={`unit-${i}`}>
+                                                                        <path d={generateSvgPath(pts, null, scale)} fill={`rgba(99, 102, 241, ${fillOpacity})`} opacity="0.85" />
+                                                                        <text x={centroid.x * scale} y={centroid.y * scale} textAnchor="middle" dominantBaseline="middle" fontSize="10" fill={isDarkMode ? "#ffffff" : "#0f172a"} className="select-none pointer-events-none font-mono">
+                                                                            {String.fromCharCode(65 + i)} ({formatNum(toPing(calculatePolygonArea(pts)))}坪)
+                                                                        </text>
+                                                                    </g>
+                                                                );
+                                                            })}
+                                                        </>
+                                                    ) : (
+                                                        <path d={generatePath()} fill={normalizedSelectedFloorId === 'excavation' ? "rgba(245, 158, 11, 0.1)" : (displayLayer.isViolation ? "rgba(239, 68, 68, 0.5)" : (normalizedSelectedFloorId === 'base' ? "#f5f5f4" : (isDarkMode ? "#38bdf8" : "#0ea5e9")))} stroke={normalizedSelectedFloorId === 'excavation' ? "#f59e0b" : (displayLayer.isViolation ? "#ef4444" : (normalizedSelectedFloorId === 'base' ? "#78716c" : "#0284c7"))} strokeWidth={normalizedSelectedFloorId === 'excavation' ? "2" : "2"} strokeDasharray={normalizedSelectedFloorId === 'excavation' ? "4,2" : "none"} opacity="0.9" />
+                                                    )}
+                                                    {displayLayer.points.map((p, i) => {
+                                                        const nextI = (i + 1) % displayLayer.points.length; const nextP = displayLayer.points[nextI]; const isLocked = lockedEdgeIndices.has(i); const curve = displayLayer.curves?.[i];
+                                                        const isFrontage = normalizedSelectedFloorId === 'base' && vizFrontIndices.has(i);
+                                                        const isBack = normalizedSelectedFloorId === 'base' && vizCombinedEdgeTypes[i] === 'back'; const isSide = normalizedSelectedFloorId === 'base' && vizCombinedEdgeTypes[i] === 'side';
+                                                        let strokeColor = (isLocked ? "#ef4444" : "transparent"); if (isFrontage) strokeColor = "#ef4444"; else if (isBack) strokeColor = "#10b981"; else if (isSide) strokeColor = "#3b82f6";
+                                                        const strokeWidth = (isFrontage || isBack || isSide) ? "4" : (isLocked ? "3" : "15"); const opacity = (isFrontage || isBack || isSide) ? 0.8 : 1;
+                                                        let edgeD = `M ${p.x * scale} ${p.y * scale}`; if (curve) { edgeD += ` Q ${curve.x * scale} ${curve.y * scale}, ${nextP.x * scale} ${nextP.y * scale}`; } else { edgeD += ` L ${nextP.x * scale} ${nextP.y * scale}`; }
+                                                        const roadNames = inputs.roads.filter(r => (r.edgeIndices || []).includes(i) || r.edgeIndex === i).map(r => r.name).join(', ');
+                                                        // Task 5: Edge Index Label
+                                                        const midX = curve ? (0.25 * p.x + 0.5 * curve.x + 0.25 * nextP.x) : (p.x + nextP.x) / 2;
+                                                        const midY = curve ? (0.25 * p.y + 0.5 * curve.y + 0.25 * nextP.y) : (p.y + nextP.y) / 2;
+                                                        return (<g key={`line-group-${i}`}> {(isFrontage || isBack || isSide) && (<path d={edgeD} stroke={isFrontage ? "#fee2e2" : (isBack ? "#d1fae5" : "#dbeafe")} strokeWidth="10" fill="none" strokeLinecap="round" />)} <path key={`line-${i}`} d={edgeD} data-type="edge-line" stroke={strokeColor} strokeWidth={strokeWidth} fill="none" strokeLinecap="round" strokeOpacity={opacity} className={`${(isLocked || isFrontage || isBack || isSide) ? 'cursor-default' : (isRoadSelectMode || interactionMode !== 'none' ? 'cursor-pointer hover:stroke-indigo-400/50' : 'cursor-crosshair hover:stroke-black/10')}`} onContextMenu={(e) => handleEdgeContextMenu(e, i)} onPointerDown={(e) => isLocked ? handleEdgePointerDown(e, i) : handleEdgePointerDown(e, i)} onPointerUp={handleEdgePointerUp} onPointerMove={handlePointPointerMove} onClick={(e) => (!isLocked || isRoadSelectMode || interactionMode !== 'none') && handleLineClick(e, i, nextI)} /> {isFrontage && !baseCurves?.[i] && (<text x={(p.x + nextP.x) / 2 * scale} y={(p.y + nextP.y) / 2 * scale} textAnchor="middle" dominantBaseline="middle" fontSize="8" fontWeight="bold" fill="#b91c1c" pointerEvents="none" className="select-none"> {`${roadNames || "道路"} (${i})`} </text>)}
+                                                            {!isFrontage && <text x={midX * scale} y={midY * scale} textAnchor="middle" dominantBaseline="middle" fontSize="8" fill={isDarkMode ? "#94a3b8" : "#64748b"} className="select-none pointer-events-none font-mono bg-white/50">{i}</text>}
+                                                        </g>);
+                                                    })}
+                                                    {renderCurveHandles()} {displayLayer.points.map((p, i) => (<g key={`pt-${i}`} transform={`translate(${p.x * scale}, ${p.y * scale})`}> <circle data-type="control-point" r="6" fill="white" stroke={selectedIndices.has(i) ? "#6366f1" : (normalizedSelectedFloorId === 'excavation' ? "#f59e0b" : "#0284c7")} strokeWidth={selectedIndices.has(i) ? "3" : "2"} className={`cursor-grab relative ${selectedIndices.has(i) ? 'animate-pulse-ring' : ''}`} onPointerDown={(e) => handlePointPointerDown(e, i)} onPointerMove={handlePointPointerMove} onPointerUp={handlePointPointerUp} onContextMenu={(e) => handleDeletePoint(e, i)} /> </g>))}
+                                                </>
+                                            ) : (<rect x={-(displayLayer.realWidth * scale) / 2} y={-(displayLayer.realDepth * scale) / 2} width={displayLayer.realWidth * scale} height={displayLayer.realDepth * scale} fill={displayLayer.isViolation ? "rgba(239, 68, 68, 0.5)" : (isDarkMode ? "#38bdf8" : "#0ea5e9")} stroke={displayLayer.isViolation ? "#ef4444" : "#0284c7"} strokeWidth="2" opacity="0.9" />)}
+                                            {normalizedSelectedFloorId !== 'base' && <circle cx={(displayLayer.pivot?.x || 0) * scale} cy={(displayLayer.pivot?.y || 0) * scale} r="4" fill="#ef4444" stroke="white" strokeWidth="1" />}
+                                        </g>
+                                    </svg>
+                                </div>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="w-full h-full overflow-y-auto p-4 pt-16 overscroll-contain" style={{ overscrollBehaviorX: 'contain' }}>
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-20">
+                                <div onClick={() => onSelectFloor('base')} className={`aspect-square rounded-xl border-2 theme-border transition-all cursor-pointer flex flex-col items-center justify-center relative theme-panel shadow-md hover:opacity-80 hover:shadow-lg hover:border-[var(--text-accent)]`}>
+                                    <span className="absolute top-2 left-2 text-xs font-bold theme-text bg-[var(--bg-body)] px-1.5 rounded shadow-sm z-10">基地</span>
+                                    <svg width={100} height={100} viewBox={`-${baseWidthM * baseItemScale / 2 + 20} -${baseDepthM * baseItemScale / 2 + 20} ${baseWidthM * baseItemScale + 40} ${baseDepthM * baseItemScale + 40}`} className="overflow-visible"> {currentBasePoints ? (<> <path d={generateSvgPath(currentBasePoints, baseCurves, baseItemScale)} fill="rgba(99,102,241,0.15)" stroke="#6366f1" strokeWidth="2" /> </>) : (<> <rect x={-baseWidthM * baseItemScale / 2} y={-baseDepthM * baseItemScale / 2} width={baseWidthM * baseItemScale} height={baseDepthM * baseItemScale} fill="rgba(99,102,241,0.15)" stroke="#6366f1" strokeWidth="2" /> </>)} </svg>
+                                    <div className="absolute bottom-2 text-[10px] theme-text-muted font-mono">{formatNum(inputs.baseArea)}m²</div>
+                                </div>
+                                <div onClick={() => onSelectFloor('excavation')} className={`aspect-square rounded-xl border-2 border-dashed transition-all cursor-pointer flex flex-col items-center justify-center relative theme-panel shadow-md hover:opacity-80 hover:shadow-lg hover:border-[var(--text-accent)]`}>
+                                    <span className="absolute top-2 left-2 text-xs font-bold text-amber-600 bg-amber-100 px-1.5 rounded">開挖範圍</span> <div className="text-amber-300 mb-2"><Shovel size={24} /></div> <div className="text-xs text-stone-500 font-bold">設定開挖邊界</div> {excavationPoints && <div className="text-[10px] text-stone-400 mt-1">自訂形狀已啟用</div>}
+                                </div>
+                                {basements.map((b, i) => { if (!b.active) return null; const baseDim = 100; const scale = baseDim / Math.max(baseWidthM, baseDepthM); const baseW = baseWidthM * scale; const baseH = baseDepthM * scale; const custom = floorSettings?.[b.id]?.points || null; const customCurves = floorSettings?.[b.id]?.curves || null; let pts = custom || excavationPoints; let curves = customCurves || excavationCurves || null; if (!pts && currentBasePoints) { const scaleRate = Math.sqrt((inputs.excavationRatio || 70) / 100); const scaled = scalePolygon(currentBasePoints, baseCurves, scaleRate, { x: 0, y: 0 }); pts = scaled.points; curves = curves || scaled.curves; } const area = pts ? calculatePolygonArea(pts, curves) : b.area; return (<div key={b.id} onClick={() => onSelectFloor(b.id)} className={`aspect-square rounded-xl border-2 transition-all cursor-pointer flex flex-col items-center justify-center relative theme-panel shadow-md hover:opacity-80 hover:shadow-lg hover:border-[var(--text-accent)]`}> <span className="absolute top-2 left-2 text-xs font-bold theme-text-muted bg-[var(--bg-body)] px-1.5 rounded shadow-sm z-10">{b.id}</span> <svg width={baseDim} height={baseDim} viewBox={`-${baseW / 2 + 10} -${baseH / 2 + 10} ${baseW + 20} ${baseH + 20}`} className="overflow-visible"> {currentBasePoints ? (<path d={generateSvgPath(currentBasePoints, baseCurves, scale)} fill="none" stroke={isDarkMode ? '#475569' : '#94a3b8'} strokeWidth="1" strokeDasharray="3,3" />) : (<rect x={-baseW / 2} y={-baseH / 2} width={baseW} height={baseH} fill="none" stroke={isDarkMode ? '#475569' : '#94a3b8'} strokeWidth="1" strokeDasharray="3,3" />)} <g> {pts ? (<path d={generateSvgPath(pts, curves, scale)} fill="rgba(168,85,247,0.2)" stroke="#a855f7" strokeWidth="1.5" />) : (<rect x={-(baseW * Math.sqrt(inputs.excavationRatio / 100)) / 2} y={-(baseH * Math.sqrt(inputs.excavationRatio / 100)) / 2} width={baseW * Math.sqrt(inputs.excavationRatio / 100)} height={baseH * Math.sqrt(inputs.excavationRatio / 100)} fill="rgba(168,85,247,0.2)" stroke="#a855f7" strokeWidth="1.5" />)} </g> </svg> <div className="absolute bottom-2 text-[10px] theme-text-muted font-mono">{formatNum(toPing(area))}坪</div> </div>); })}
+                                {groupedLayers.map((group) => {
+                                    const firstLayer = group.units[0];
+                                    if (!firstLayer) return null;
+                                    const baseDim = 100;
+                                    const scale = baseDim / Math.max(baseWidthM, baseDepthM);
+                                    const baseW = baseWidthM * scale;
+                                    const baseH = baseDepthM * scale;
+                                    const shiftX_M = firstLayer.shiftX / scale3d;
+                                    const shiftY_M = firstLayer.shiftYPx / scale3d;
+                                    const xPos = shiftX_M * scale;
+                                    const yPos = shiftY_M * scale;
+                                    const isViolation = group.units.some(u => u.isViolation);
+                                    const totalFloorArea = group.units.reduce((sum, u) => sum + (u.realArea || 0), 0);
+                                    const floorFill = isViolation ? 'rgba(239,68,68,0.3)' : 'rgba(14,165,233,0.25)';
+                                    const floorStroke = isViolation ? '#ef4444' : '#0ea5e9';
+                                    return (
+                                        <div key={group.id} onClick={() => onSelectFloor(group.id)} className={`aspect-square rounded-xl border-2 transition-all cursor-pointer flex flex-col items-center justify-center relative theme-panel shadow-md hover:opacity-80 hover:shadow-lg hover:border-[var(--text-accent)]`}>
+                                            <span className="absolute top-2 left-2 text-xs font-bold theme-text-muted bg-[var(--bg-body)] px-1.5 rounded shadow-sm z-10">
+                                                {group.id}{group.units.length > 1 ? ` (${group.units.length}戶)` : ''}
+                                            </span>
+                                            {isViolation && <AlertTriangle size={14} className="absolute top-2 right-2 text-red-500" />}
+                                            <svg width={baseDim} height={baseDim} viewBox={`-${baseW / 2 + 10} -${baseH / 2 + 10} ${baseW + 20} ${baseH + 20}`} className="overflow-visible">
+                                                {currentBasePoints ? (
+                                                    <path d={generateSvgPath(currentBasePoints, baseCurves, scale)} fill="none" stroke={isDarkMode ? '#475569' : '#94a3b8'} strokeWidth="1" strokeDasharray="3,3" />
+                                                ) : (
+                                                    <rect x={-baseW / 2} y={-baseH / 2} width={baseW} height={baseH} fill="none" stroke={isDarkMode ? '#475569' : '#94a3b8'} strokeWidth="1" strokeDasharray="3,3" />
+                                                )}
+                                                <g transform={`translate(${xPos}, ${yPos}) rotate(${firstLayer.rotation || 0})`}>
+                                                    {group.units.map((unitLayer) => (
+                                                        unitLayer.points ? (
+                                                            <path key={unitLayer.id} d={generateSvgPath(unitLayer.points, unitLayer.curves, scale)} fill={floorFill} stroke={floorStroke} strokeWidth="1.5" />
+                                                        ) : (
+                                                            <rect key={unitLayer.id} x={-(unitLayer.realWidth * scale) / 2} y={-(unitLayer.realDepth * scale) / 2} width={unitLayer.realWidth * scale} height={unitLayer.realDepth * scale} fill={floorFill} stroke={floorStroke} strokeWidth="1.5" />
+                                                        )
+                                                    ))}
+                                                </g>
+                                            </svg>
+                                            <div className="absolute bottom-2 text-[10px] theme-text-muted font-mono">{formatNum(toPing(totalFloorArea))}坪</div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+                    {displayLayer && (<EditMenu2D data={displayLayer} isDarkMode={isDarkMode} onUpdateSetting={updateSetting} onReset={(id) => updateSetting(id, 'reset')} isOpen={true} onClose={onClose} scale3d={scale3d} inputs={inputs} basePoints={basePoints} baseCurves={baseCurves} isRoadSelectMode={isRoadSelectMode} onToggleRoadSelectMode={() => setIsRoadSelectMode(!isRoadSelectMode)} interactionMode={interactionMode} setInteractionMode={setInteractionMode} selectedCurveIdx={selectedCurveForEdit} onUpdateRoads={onUpdateRoads} onUpdateInputs={onUpdateInputs} isAreaLocked={isAreaLocked} setIsAreaLocked={setIsAreaLocked} unitSettings={unitSettings} onUpdateUnitSettings={onUpdateUnitSettings} />)}
+                </div>
+            );
+        };
+
+export default PlanAnalysis2D;

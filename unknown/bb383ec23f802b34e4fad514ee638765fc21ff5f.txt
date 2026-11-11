@@ -1,0 +1,18 @@
+﻿
+  
+  C:\Users\Shiva.C\Document
+s\trae_projects\ARCHI\cal_b
+ase\dist\YRA-React\src\stor
+e\floorStore.jsx
+>   44:17  error  Fast refr
+esh only works when a file 
+only exports components. Us
+e a new file to share const
+ants or functions between c
+omponents  react-refresh/on
+ly-export-components
+  
+  ??104 problems (93 errors
+, 11 warnings)
+
+

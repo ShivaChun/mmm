@@ -1,0 +1,73 @@
+Created At: 2026-07-02T16:54:39Z
+Completed At: 2026-07-02T16:54:39Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1568
+Total Bytes: 80255
+Showing lines 456 to 520
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+456:                     const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % ptsA.length;
+457:                     const pt1 = ptsA[roadEdgeIdx];
+458:                     const pt2 = ptsA[(roadEdgeIdx + 1) % ptsA.length];
+459:                     p1 = { 
+460:                         x: apA.x + (pt1.x * cosA - pt1.y * sinA), 
+461:                         y: apA.y + (pt1.x * sinA + pt1.y * cosA) 
+462:                     };
+463:                     p2 = { 
+464:                         x: apA.x + (pt2.x * cosA - pt2.y * sinA), 
+465:                         y: apA.y + (pt2.x * sinA + pt2.y * cosA) 
+466:                     };
+467:                 } else {
+468:                     const localA = [
+469:                         { x: -wA/2, y: -dA/2 }, { x: wA/2, y: -dA/2 },
+470:                         { x: wA/2, y: dA/2 }, { x: -wA/2, y: dA/2 }
+471:                     ];
+472:                     const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % 4;
+473:                     const pt1 = localA[roadEdgeIdx];
+474:                     const pt2 = localA[(roadEdgeIdx + 1) % 4];
+475:                     p1 = { 
+476:                         x: apA.x + (pt1.x * cosA - pt1.y * sinA), 
+477:                         y: apA.y + (pt1.x * sinA + pt1.y * cosA) 
+478:                     };
+479:                     p2 = { 
+480:                         x: apA.x + (pt2.x * cosA - pt2.y * sinA), 
+481:                         y: apA.y + (pt2.x * sinA + pt2.y * cosA) 
+482:                     };
+483:                 }
+484:                 
+485:                 const dx = p2.x - p1.x;
+486:                 const dy = p2.y - p1.y;
+487:                 const L = Math.sqrt(dx*dx + dy*dy);
+488:                 if (L > 0.001) {
+489:                     const ptsA_pts = ptsA || [
+490:                         { x: -wA/2, y: -dA/2 }, { x: wA/2, y: -dA/2 },
+491:                         { x: wA/2, y: dA/2 }, { x: -wA/2, y: dA/2 }
+492:                     ];
+493:                     const sCentroidLocal = getPolygonCentroid(ptsA_pts);
+494:                     const sCentroid = {
+495:                         x: apA.x + (sCentroidLocal.x * cosA - sCentroidLocal.y * sinA),
+496:                         y: apA.y + (sCentroidLocal.x * sinA + sCentroidLocal.y * cosA)
+497:                     };
+498:                     
+499:                     const nx = -dy / L;
+500:                     const ny = dx / L;
+501:                     const vcx = (p1.x + p2.x)/2 - sCentroid.x;
+502:                     const vcy = (p1.y + p2.y)/2 - sCentroid.y;
+503:                     const dot = nx * vcx + ny * vcy;
+504:                     const rx = dot >= 0 ? nx : -nx;
+505:                     const ry = dot >= 0 ? ny : -ny;
+506:                     
+507:                     const roadOutP1 = { x: p1.x + rx * roadWidth, y: p1.y + ry * roadWidth };
+508:                     const roadOutP2 = { x: p2.x + rx * roadWidth, y: p2.y + ry * roadWidth };
+509:                     roadWorldPolygon = [p1, p2, roadOutP2, roadOutP1];
+510:                 }
+511:             }
+512:         }
+513: 
+514:         // 精準檢查與所有現有基地是否重疊
+515:         let isColliding = false;
+516:         for (const s of sites) {
+517:             const sPos = s.position || { x: 0, y: 0, rotation: 0 };
+518:             const sGeom = s.baseGeometry?.points || s.basePoints;
+519:             let sLocalPts = [];
+520:             
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

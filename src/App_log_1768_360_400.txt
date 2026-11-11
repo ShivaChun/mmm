@@ -1,0 +1,49 @@
+Created At: 2026-07-02T16:45:55Z
+Completed At: 2026-07-02T16:45:55Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 854
+Total Bytes: 72502
+Showing lines 360 to 400
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+360:                             <div className="text-white group-hover:scale-125 transition-transform">
+361:                                 {showVisualizer ? <ChevronUp size={28} strokeWidth={3} /> : <ChevronDown size={28} strokeWidth={3} />}
+362:                             </div>
+363:                         </div>
+364:                     </div>
+365:                     
+366:                     <div className={`transition-all duration-500 ease-in-out ${showVisualizer ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
+367:                         {showVisualizer && (
+368:                             <div className="theme-panel p-1 bg-[var(--border-strong)]">
+369:                                 <Visualizer3D
+370:                                     isFullscreen={isFullscreen}
+371:                                     setIsFullscreen={setIsFullscreen}
+372:                                     isDarkMode={isDarkMode}
+373:                                     setIsDarkMode={setIsDarkMode}
+374:                                     sites={sites}
+375:                                     activeSiteId={activeSite.id}
+376:                                     inputs={{ ...inputs, baseArea: finalRes.base, floorsAbove: finalRes.floorsAbove }}
+377:                                     res={finalRes}
+378:                                     siteResults={siteResults}
+379:                                     onUpdateBaseDim={updateBaseDim}
+380:                                     onUpdateRoads={handleUpdateRoads}
+381:                                     onUpdateInputs={handleUpdateInputs}
+382:                                     onUpdateSiteSetting={handleUpdateSiteSetting}
+383:                                     showCheckLines={showCheckLines}
+384:                                     setShowCheckLines={setShowCheckLines}
+385:                                     showHeightRatio={showHeightRatio}
+386:                                     setShowHeightRatio={setShowHeightRatio}
+387:                                     showWeiLao={showWeiLao}
+388:                                     setShowWeiLao={setShowWeiLao}
+389:                                     showBackyard={showBackyard}
+390:                                     setShowBackyard={setShowBackyard}
+391:                                     isConstraintMode={isConstraintMode}
+392:                                     setIsConstraintMode={setIsConstraintMode}
+393:                                     onUnusedAreaChange={setUnusedArea}
+394:                                     placementMode={placementMode}
+395:                                     referenceEdge={referenceEdge}
+396:                                     setReferenceEdge={setReferenceEdge}
+397:                                     placementOffset={placementOffset}
+398:                                     setPlacementOffset={setPlacementOffset}
+399:                                     onConfirmPlacement={handleConfirmPlacement}
+400:                                     onUpdateSiteGeometry={(geom) => handleUpdateSiteGeometry(activeSiteIndex, geom)}
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

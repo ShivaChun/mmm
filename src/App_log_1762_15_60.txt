@@ -1,0 +1,54 @@
+Created At: 2026-07-02T16:45:49Z
+Completed At: 2026-07-02T16:45:49Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 854
+Total Bytes: 72502
+Showing lines 15 to 60
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+15:     // ── Multi-Site State ──
+16:     const [sites, setSites] = useState([createDefaultSite('基地 A', 1)]);
+17:     const [activeSiteIndex, setActiveSiteIndex] = useState(0);
+18:     const [showAddSiteDialog, setShowAddSiteDialog] = useState(false);
+19:     const [showCombinedTable, setShowCombinedTable] = useState(true);
+20: 
+21:     // ── Placement Mode State ──
+22:     const [placementMode, setPlacementMode] = useState(false); // false or 'independent'
+23:     const [referenceEdge, setReferenceEdge] = useState(null);
+24:     const [placementOffset, setPlacementOffset] = useState({ x: 0, y: 0 });
+25: 
+26:     // Derived active-site accessors (so all existing handlers keep working)
+27:     const activeSite = sites[activeSiteIndex] || sites[0];
+28:     const lots = activeSite.lots;
+29:     const inputs = activeSite.inputs;
+30:     const overrides = activeSite.overrides;
+31:     const setLots = useCallback((u) => setSites(p => p.map((s, i) => i === activeSiteIndex ? { ...s, lots: typeof u === 'function' ? u(s.lots) : u } : s)), [activeSiteIndex]);
+32:     const setInputs = useCallback((u) => setSites(p => p.map((s, i) => i === activeSiteIndex ? { ...s, inputs: typeof u === 'function' ? u(s.inputs) : u } : s)), [activeSiteIndex]);
+33:     const setOverrides = useCallback((u) => setSites(p => p.map((s, i) => i === activeSiteIndex ? { ...s, overrides: typeof u === 'function' ? u(s.overrides) : u } : s)), [activeSiteIndex]);
+34: 
+35:     // ── Global Params (shared) ──
+36:     const [params, setParams] = useState({ exemptRate: 15, stairRate: 5, balconyRate: 10, pricePerPing: 25 });
+37:     const [isEditMode, setIsEditMode] = useState(false);
+38:     const [unusedArea, setUnusedArea] = useState(0);
+39:     const [showDetail, setShowDetail] = useState(true);
+40:     const [showVisualizer, setShowVisualizer] = useState(true);
+41:     const [showBasePanels, setShowBasePanels] = useState(true);
+42:     const [showCheckLines, setShowCheckLines] = useState(true);
+43:     const [showHeightRatio, setShowHeightRatio] = useState(true);
+44:     const [showWeiLao, setShowWeiLao] = useState(false);
+45:     const [showBackyard, setShowBackyard] = useState(true);
+46:     const [isConstraintMode, setIsConstraintMode] = useState(false);
+47:     const [isDarkMode, setIsDarkMode] = useState(false);
+48: 
+49:     useEffect(() => {
+50:         if (isDarkMode) {
+51:             document.documentElement.classList.add('theme-cyberpunk');
+52:             document.documentElement.classList.remove('theme-neumorphism');
+53:         } else {
+54:             document.documentElement.classList.add('theme-neumorphism');
+55:             document.documentElement.classList.remove('theme-cyberpunk');
+56:         }
+57:     }, [isDarkMode]);
+58: 
+59:     // Removed unused toggleConstraints
+60: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

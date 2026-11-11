@@ -1,0 +1,28 @@
+Created At: 2026-07-02T16:45:56Z
+Completed At: 2026-07-02T16:45:56Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 854
+Total Bytes: 72502
+Showing lines 1 to 20
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: import React, { useState, useEffect, useCallback } from 'react';
+2: import { Building2, MapPin, Plus, Trash2, FileText, Layers, ChevronUp, ChevronDown, AlertTriangle, Settings2, Pencil, Box, MapPinned, X } from 'lucide-react';
+3: import { useSiteAnalysis } from './hooks/useSiteAnalysis';
+4: import { useMultiSiteAnalysis } from './hooks/useMultiSiteAnalysis';
+5: import { toPing, formatNum } from './utils/geometry';
+6: import Visualizer3D from './components/PlanAnalysis3D';
+7: import { ContextMenu } from './components/ContextMenu.jsx';
+8: import { CollapsibleSection, InputRow, SectionHeader } from './components/Si.jsx';
+9: 
+10: const DEFAULT_INPUTS = { projectName: '', district: '南投縣中興新村', roads: [{ id: 1, name: '向陽路', width: 10, orientation: 'bottom', type: 'primary', edgeIndex: 2 }], zoneType: '住宅區', urbanPlanName: '中興新村都市計畫區', coverageRatio: 50, floorRatio: 150, excavationRatio: 60, floorsBelow: 1, avgCarArea: 35, frontYardDepth: 4, sideYardDepth: 1.5, sideYardDirection: 'right', backYardDepth: 3, floorHeight1F: 4.2, floorHeightOther: 3.6, baseWidth: '', incentiveArea: 0, transferArea: 0, minBackyardDepthRatio: 0, arcadeDepth: 0, floorsAbove: 4, northAngle: 0 };
+11: const SITE_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+12: const createDefaultSite = (name, id) => ({ id: id || Date.now(), name: name || '基地', lots: [{ id: 1, lot: '___段___地號', area: 239.12 }], inputs: { ...DEFAULT_INPUTS }, overrides: {}, position: { x: 0, y: 0 }, baseGeometry: { points: null, curves: null } });
+13: 
+14: const Cal = () => {
+15:     // ── Multi-Site State ──
+16:     const [sites, setSites] = useState([createDefaultSite('基地 A', 1)]);
+17:     const [activeSiteIndex, setActiveSiteIndex] = useState(0);
+18:     const [showAddSiteDialog, setShowAddSiteDialog] = useState(false);
+19:     const [showCombinedTable, setShowCombinedTable] = useState(true);
+20: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

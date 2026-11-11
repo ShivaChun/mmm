@@ -1,0 +1,27 @@
+[36mvite v7.3.1 [32mbuilding client environment for production...[36m[39m
+transforming...
+[32m✓[39m 24 modules transformed.
+[31m✗[39m Build failed in 281ms
+[31merror during build:
+[31m[vite:esbuild] Transform failed with 1 error:
+C:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/components/SitePolygonEditor.jsx:18:48: ERROR: Syntax error "}"[31m
+file: [36mC:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/components/SitePolygonEditor.jsx:18:48[31m
+[33m
+[33mSyntax error "}"[33m
+16 |  
+17 |      if (!isEditing) {
+18 |          return <span className={cursor-pointer \} onClick={() => setIsEditing(true)}>{value}</span>;
+   |                                                  ^
+19 |      }
+20 |      return (
+[31m
+    at failureErrorWithLog (C:\Users\Shiva.C\Documents\trae_projects\ARCHI\cal_base\dist\YRA-React\node_modules\esbuild\lib\main.js:1467:15)
+    at C:\Users\Shiva.C\Documents\trae_projects\ARCHI\cal_base\dist\YRA-React\node_modules\esbuild\lib\main.js:736:50
+    at responseCallbacks.<computed> (C:\Users\Shiva.C\Documents\trae_projects\ARCHI\cal_base\dist\YRA-React\node_modules\esbuild\lib\main.js:603:9)
+    at handleIncomingPacket (C:\Users\Shiva.C\Documents\trae_projects\ARCHI\cal_base\dist\YRA-React\node_modules\esbuild\lib\main.js:658:12)
+    at Socket.readFromStdout (C:\Users\Shiva.C\Documents\trae_projects\ARCHI\cal_base\dist\YRA-React\node_modules\esbuild\lib\main.js:581:7)
+    at Socket.emit (node:events:518:28)
+    at addChunk (node:internal/streams/readable:561:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:512:3)
+    at Readable.push (node:internal/streams/readable:392:5)
+    at Pipe.onStreamRead (node:internal/stream_base_commons:189:23)[39m

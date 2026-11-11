@@ -1,0 +1,31 @@
+Created At: 2026-07-02T16:53:51Z
+Completed At: 2026-07-02T16:53:51Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1500
+Total Bytes: 77260
+Showing lines 93 to 115
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+93:     const [isConstraintMode, setIsConstraintMode] = useState(false);
+94:     const [isDarkMode, setIsDarkMode] = useState(false);
+95:     const [contextMenu, setContextMenu] = useState({ isOpen: false, x: 0, y: 0 });
+96: 
+97:     useEffect(() => {
+98:         if (isDarkMode) {
+99:             document.documentElement.classList.add('theme-cyberpunk');
+100:             document.documentElement.classList.remove('theme-neumorphism');
+101:         } else {
+102:             document.documentElement.classList.add('theme-neumorphism');
+103:             document.documentElement.classList.remove('theme-cyberpunk');
+104:         }
+105:     }, [isDarkMode]);
+106: 
+107:     // Removed unused toggleConstraints
+108: 
+109:     const updateLot = (id, field, value) => { setLots(prev => prev.map(l => l.id === id ? { ...l, [field]: field === 'area' ? (parseFloat(value) || 0) : value } : l)); };
+110:     const addLot = () => { const newId = Math.max(...lots.map(l => l.id), 0) + 1; setLots([...lots, { id: newId, lot: '', area: 0 }]); };
+111:     const removeLot = (id) => { if (lots.length > 1) setLots(lots.filter(l => l.id !== id)); };
+112:     const updateRoad = (id, field, value) => { setInputs(prev => ({ ...prev, roads: prev.roads.map(r => r.id === id ? { ...r, [field]: value } : r) })); };
+113:     const addRoad = () => { const newId = Math.max(...inputs.roads.map(r => r.id), 0) + 1; setInputs(prev => ({ ...prev, roads: [...prev.roads, { id: newId, name: '新道路', width: 6, orientation: 'custom', type: 'secondary' }] })); };
+114:     const removeRoad = (id) => { if (inputs.roads.length > 1) setInputs(prev => ({ ...prev, roads: prev.roads.filter(r => r.id !== id) })); };
+115:     const handleUpdateRoads = (newRoads) => { setInputs(prev => ({ ...prev, roads: newRoads })); };
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

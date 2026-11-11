@@ -1,0 +1,44 @@
+Created At: 2026-07-03T01:16:50Z
+Completed At: 2026-07-03T01:16:50Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1147
+Total Bytes: 76664
+Showing lines 680 to 715
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+680:             <ContextMenu x={contextMenu.x} y={contextMenu.y} isOpen={contextMenu.isOpen} onClose={() => setContextMenu({ ...contextMenu, isOpen: false })} activePanels={activePanels} onTogglePanel={(panel) => setActivePanels(prev => prev.includes(panel) ? prev.filter(p => p !== panel) : [...prev, panel])} />
+681:             
+682:             {/* 3D VISUALIZER SECTION (Full Screen) */}
+683:             <div className="absolute inset-0 z-0">
+684:                 <Visualizer3D
+685:                     isDarkMode={isDarkMode}
+686:                     setIsDarkMode={setIsDarkMode}
+687:                     sites={sites}
+688:                     activeSiteId={activeSite.id}
+689:                     inputs={{ ...inputs, baseArea: finalRes.base, floorsAbove: finalRes.floorsAbove }}
+690:                     res={finalRes}
+691:                     siteResults={siteResults}
+692:                     onUpdateBaseDim={updateBaseDim}
+693:                     onUpdateRoads={handleUpdateRoads}
+694:                     onUpdateInputs={handleUpdateInputs}
+695:                     onUpdateSiteSetting={handleUpdateSiteSetting}
+696:                     showCheckLines={showCheckLines}
+697:                     setShowCheckLines={setShowCheckLines}
+698:                     showHeightRatio={showHeightRatio}
+699:                     setShowHeightRatio={setShowHeightRatio}
+700:                     showWeiLao={showWeiLao}
+701:                     setShowWeiLao={setShowWeiLao}
+702:                     showBackyard={showBackyard}
+703:                     setShowBackyard={setShowBackyard}
+704:                     isConstraintMode={isConstraintMode}
+705:                     setIsConstraintMode={setIsConstraintMode}
+706:                     onUnusedAreaChange={setUnusedArea}
+707:                     placementMode={placementMode}
+708:                     referenceEdge={referenceEdge}
+709:                     setReferenceEdge={setReferenceEdge}
+710:                     placementOffset={placementOffset}
+711:                     setPlacementOffset={setPlacementOffset}
+712:                     onConfirmPlacement={handleConfirmPlacement}
+713:                     onUpdateSiteGeometry={(geom) => handleUpdateSiteGeometry(activeSiteIndex, geom)}
+714:                     setActiveSiteIndex={setActiveSiteIndex}
+715:                 />
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

@@ -1,0 +1,209 @@
+Created At: 2026-07-03T04:58:37Z
+Completed At: 2026-07-03T04:58:37Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1500
+Total Bytes: 77260
+Showing lines 1300 to 1500
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1300: 
+1301: 
+1302: 
+1303: 
+1304: 
+1305: 
+1306: 
+1307: 
+1308: 
+1309: 
+1310: 
+1311: 
+1312: 
+1313: 
+1314: 
+1315: 
+1316: 
+1317: 
+1318: 
+1319: 
+1320: 
+1321: 
+1322: 
+1323: 
+1324: 
+1325: 
+1326: 
+1327: 
+1328: 
+1329: 
+1330: 
+1331: 
+1332: 
+1333: 
+1334: 
+1335: 
+1336: 
+1337: 
+1338: 
+1339: 
+1340: 
+1341: 
+1342: 
+1343: 
+1344: 
+1345: 
+1346: 
+1347: 
+1348: 
+1349: 
+1350: 
+1351: 
+1352: 
+1353:                     </section>
+1354:                     </FloatingPanel>
+1355:                     </div>
+1356:                 )}
+1357:             </div>
+1358:                     </section>
+1359:                     </FloatingPanel>
+1360:                     </div>
+1361:                 )}
+1362: 
+1363:                 {/* PROJECT SUMMARY PANEL */}
+1364:                 {activePanel === 'summary' && (
+1365:                     <div className="pointer-events-auto">
+1366:                         <FloatingPanel title="專案摘要" onClose={() => setActivePanel(null)} widthClass="w-[92vw] md:w-[480px]">
+1367:                             <div className="space-y-4">
+1368:                                 <div className="space-y-2 mb-4">
+1369:                                     <SummaryRow label="專案名稱" value={inputs.projectName} />
+1370:                                     <SummaryRow label="工程預算" value={`${formatNum(finalRes.estimatedBudget)} 萬`} highlight />
+1371:                                     <SummaryRow label="建築物高度" value={`${formatNum(finalRes.buildingHeight)} m`} />
+1372:                                     <SummaryRow label="模擬樓層" value={`${finalRes.floorsAbove} 層`} subtext="(含退縮)" />
+1373:                                     {showCheckLines && showHeightRatio && (
+1374:                                         <SummaryRow 
+1375:                                             label="高度比 H/D" 
+1376:                                             value={formatNum(finalRes.heightRatio, 2)} 
+1377:                                             isAlert={finalRes.heightRatio > 3.6} 
+1378:                                             alertText="超限" 
+1379:                                         />
+1380:                                     )}
+1381:                                 </div>
+1382:                                 
+1383:                                 <div className="grid grid-cols-2 gap-2 mb-4">
+1384:                                     <div className="theme-panel p-3 rounded-lg border theme-border">
+1385:                                         <div className="theme-text-muted text-[10px] uppercase mb-1">樓層</div>
+1386:                                         <div className="font-bold text-base num-font text-indigo-600">
+1387:                                             {finalRes.floorsAbove}F <span className="text-xs font-normal theme-text-muted">/ B{inputs.floorsBelow}</span>
+1388:                                         </div>
+1389:                                     </div>
+1390:                                     <div className="theme-panel p-3 rounded-lg border theme-border">
+1391: 
+1392: 
+1393: 
+1394: 
+1395: 
+1396: 
+1397: 
+1398: 
+1399: 
+1400: 
+1401: 
+1402: 
+1403: 
+1404: 
+1405: 
+1406: 
+1407: 
+1408: 
+1409: 
+1410: 
+1411: 
+1412: 
+1413: 
+1414: 
+1415: 
+1416: 
+1417: 
+1418: 
+1419: 
+1420: 
+1421: 
+1422: 
+1423: 
+1424: 
+1425: 
+1426: 
+1427: 
+1428: 
+1429: 
+1430: 
+1431: 
+1432: 
+1433: 
+1434: 
+1435: 
+1436: 
+1437: 
+1438:                     </section>
+1439:                     </FloatingPanel>
+1440:                     </div>
+1441:                 )}
+1442: 
+1443:                 {/* PROJECT SUMMARY PANEL */}
+1444:                 {activePanel === 'summary' && (
+1445:                     <div className="pointer-events-auto">
+1446:                         <FloatingPanel title="專案摘要" onClose={() => setActivePanel(null)} widthClass="w-[92vw] md:w-[480px]">
+1447:                             <div className="space-y-4">
+1448:                                 <div className="space-y-2 mb-4">
+1449:                                     <SummaryRow label="專案名稱" value={inputs.projectName} />
+1450:                                     <SummaryRow label="工程預算" value={`${formatNum(finalRes.estimatedBudget)} 萬`} highlight />
+1451:                                     <SummaryRow label="建築物高度" value={`${formatNum(finalRes.buildingHeight)} m`} />
+1452:                                     <SummaryRow label="模擬樓層" value={`${finalRes.floorsAbove} 層`} subtext="(含退縮)" />
+1453:                                     {showCheckLines && showHeightRatio && (
+1454:                                         <SummaryRow 
+1455:                                             label="高度比 H/D" 
+1456:                                             value={formatNum(finalRes.heightRatio, 2)} 
+1457:                                             isAlert={finalRes.heightRatio > 3.6} 
+1458:                                             alertText="超限" 
+1459:                                         />
+1460:                                     )}
+1461:                                 </div>
+1462:                                 
+1463:                                 <div className="grid grid-cols-2 gap-2 mb-4">
+1464:                                     <div className="theme-panel p-3 rounded-lg border theme-border">
+1465:                                         <div className="theme-text-muted text-[10px] uppercase mb-1">樓層</div>
+1466:                                         <div className="font-bold text-base num-font text-indigo-600">
+1467:                                             {finalRes.floorsAbove}F <span className="text-xs font-normal theme-text-muted">/ B{inputs.floorsBelow}</span>
+1468:                                         </div>
+1469:                                     </div>
+1470:                                     <div className="theme-panel p-3 rounded-lg border theme-border">
+1471:                                         <div className="theme-text-muted text-[10px] uppercase mb-1">停車</div>
+1472:                                         <div className="font-bold text-base num-font theme-text">
+1473:                                             {finalRes.possibleParking} <span className="text-xs font-normal theme-text-muted">部</span>
+1474:                                         </div>
+1475:                                     </div>
+1476:                                 </div>
+1477: 
+1478:                                 {unusedArea > 0.1 && (
+1479:                                     <div className="mb-4 bg-emerald-50 p-3 rounded-lg border border-emerald-100">
+1480:                                         <div className="text-emerald-600 text-[10px] uppercase mb-1">未用容積 (坪)</div>
+1481:                                         <div className="font-bold text-base num-font text-emerald-700">{formatNum(toPing(unusedArea))}</div>
+1482:                                     </div>
+1483:                                 )}
+1484: 
+1485:                                 <div className="p-3 theme-panel rounded-lg border theme-border">
+1486:                                     <div className="theme-text-muted text-xs font-bold uppercase mb-2 flex items-center gap-1">
+1487:                                         <Car size={12} /> 停車空間預估
+1488:                                     </div>
+1489:                                     <div className="flex justify-between items-center">
+1490:                                         <div className="flex items-center gap-2">
+1491:                                             <Car size={16} />
+1492:                                             <div>
+1493:                                                 <div className="text-[10px] theme-text-muted">汽車</div>
+1494:                                                 <div className="font-bold theme-text text-sm num-font">{finalRes.possibleParking}</div>
+1495:                                             </div>
+1496:                                         </div>
+1497:                                         <div className="flex items-center gap-2">
+1498:                                             <Bike size={16} />
+1499:                                             <div>
+1500:                                                 <div className="text-[10px] theme-text-muted">機車</div>
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

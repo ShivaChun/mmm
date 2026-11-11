@@ -1,0 +1,48 @@
+Created At: 2026-07-07T02:20:00Z
+Completed At: 2026-07-07T02:20:00Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1187
+Total Bytes: 83719
+Showing lines 1 to 40
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1: import React, { useState, useEffect, useCallback } from 'react';
+2: import { Building2, MapPin, Plus, Trash2, FileText, Layers, ChevronUp, ChevronDown, AlertTriangle, Settings2, Pencil, Box, MapPinned, X } from 'lucide-react';
+3: import { useSiteAnalysis } from './hooks/useSiteAnalysis';
+4: import { useMultiSiteAnalysis } from './hooks/useMultiSiteAnalysis';
+5: import { toPing, formatNum } from './utils/geometry';
+6: import Visualizer3D from './components/PlanAnalysis3D';
+7: import { CollapsibleSection, InputRow, SectionHeader } from './components/Si.jsx';
+8: import { ContextMenu } from './components/ContextMenu.jsx';
+9: import { DraggablePanel } from './components/DraggablePanel.jsx';
+10: 
+11: const DEFAULT_INPUTS = { projectName: '', district: '南投縣中興新村', roads: [{ id: 1, name: '向陽路', width: 10, orientation: 'bottom', type: 'primary', edgeIndex: 2 }], zoneType: '住宅區', urbanPlanName: '中興新村都市計畫區', coverageRatio: 50, floorRatio: 150, excavationRatio: 60, floorsBelow: 1, avgCarArea: 35, frontYardDepth: 4, sideYardDepth: 1.5, sideYardDirection: 'right', backYardDepth: 3, floorHeight1F: 4.2, floorHeightOther: 3.6, baseWidth: '', incentiveArea: 0, transferArea: 0, minBackyardDepthRatio: 0, arcadeDepth: 0, floorsAbove: 4, northAngle: 0 };
+12: const SITE_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+13: 
+14: // 精準的多邊形重疊檢查函式 (Precision Polygon Overlap Check)
+15: const checkPolygonOverlap = (polyA, polyB) => {
+16:     const segmentsIntersect = (p1, p2, p3, p4) => {
+17:         const ccw = (A, B, C) => (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+18:         return ccw(p1, p3, p4) !== ccw(p2, p3, p4) && ccw(p1, p2, p3) !== ccw(p1, p2, p4);
+19:     };
+20: 
+21:     for (let i = 0; i < polyA.length; i++) {
+22:         const a1 = polyA[i];
+23:         const a2 = polyA[(i + 1) % polyA.length];
+24:         for (let j = 0; j < polyB.length; j++) {
+25:             const b1 = polyB[j];
+26:             const b2 = polyB[(j + 1) % polyB.length];
+27:             if (segmentsIntersect(a1, a2, b1, b2)) {
+28:                 return true;
+29:             }
+30:         }
+31:     }
+32: 
+33:     const isPointInPolygon = (pt, poly) => {
+34:         let inside = false;
+35:         for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+36:             const xi = poly[i].x, yi = poly[i].y;
+37:             const xj = poly[j].x, yj = poly[j].y;
+38:             const intersect = ((yi > pt.y) !== (yj > pt.y))
+39:                 && (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi);
+40:             if (intersect) inside = !inside;
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

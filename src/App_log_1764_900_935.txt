@@ -1,0 +1,44 @@
+Created At: 2026-07-02T16:54:59Z
+Completed At: 2026-07-02T16:54:59Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1590
+Total Bytes: 81038
+Showing lines 900 to 935
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+900:                         setShowBackyard={setShowBackyard}
+901:                         isConstraintMode={isConstraintMode}
+902:                         setIsConstraintMode={setIsConstraintMode}
+903:                         onUnusedAreaChange={setUnusedArea}
+904:                         placementMode={placementMode}
+905:                         referenceEdge={referenceEdge}
+906:                         setReferenceEdge={setReferenceEdge}
+907:                         placementOffset={placementOffset}
+908:                         setPlacementOffset={setPlacementOffset}
+909:                         onConfirmPlacement={handleConfirmPlacement}
+910:                         onUpdateSiteGeometry={(geom) => handleUpdateSiteGeometry(activeSiteIndex, geom)}
+911:                         setActiveSiteIndex={setActiveSiteIndex}
+912:                         onAction={handleCanvasAction}
+913:                         activePanels={activePanels}
+914:                         togglePanel={togglePanel}
+915:                         appState={{ sites, setSites, activeSiteIndex, setActiveSiteIndex, inputs, overrides, lots, totalBaseArea, finalRes, combined, params, isEditMode, setIsEditMode, handleInputChange, handleOverride, handleParamChange, updateRoad, addRoad, removeRoad, addLot, removeLot, updateLot, showAddSiteDialog, setShowAddSiteDialog, handleAddSite: () => setShowAddSiteDialog(true) }}
+916:                             </div>
+917:                         )}
+918:                     </div>
+919:                 </section>
+920: 
+921:                 {/* INFO & PLANNING SECTION */}
+922:                 <section className="space-y-4">
+923:                     <div className="theme-panel bg-[var(--text-primary)] p-0">
+924:                         <div 
+925:                             className="p-6 flex justify-between items-center cursor-pointer hover:bg-[var(--text-accent)] transition-colors group" 
+926:                             onClick={() => setShowBasePanels(!showBasePanels)}
+927:                         >
+928:                             <h3 className="text-2xl font-black text-white flex items-center gap-3">
+929:                                 <Layers size={24} strokeWidth={3} /> 基本資訊與規劃
+930:                             </h3>
+931:                             <div className="text-white group-hover:scale-125 transition-transform">
+932:                                 {showBasePanels ? <ChevronUp size={28} strokeWidth={3} /> : <ChevronDown size={28} strokeWidth={3} />}
+933:                             </div>
+934:                         </div>
+935:                     </div>
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

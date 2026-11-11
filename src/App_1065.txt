@@ -1,0 +1,59 @@
+Created At: 2026-06-24T07:12:14Z
+Completed At: 2026-06-24T07:12:14Z
+File Path: `file:///C:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/components/PlanAnalysis3D.jsx`
+Total Lines: 3102
+Total Bytes: 191147
+Showing lines 2950 to 3000
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+2950:                                 <SummaryRow label="工程預算" value={`${formatNum(res.estimatedBudget)} 萬`} highlight />
+2951:                                 <SummaryRow label="建築物高度" value={`${formatNum(massingLayers.totalHeight)} m`} />
+2952:                             </div>
+2953:                         </div>
+2954:                     </div>
+2955:                 )}
+2956:                 {isMobile && !isProjectSummaryVisible && (
+2957:                     <div className="fixed bottom-4 right-4 z-40">
+2958:                         <button onClick={() => setIsProjectSummaryVisible(true)} className="p-2 rounded-full theme-panel-glass border theme-border theme-text shadow-lg"><Eye size={16} /></button>
+2959:                     </div>
+2960:                 )}
+2961:             </div>
+2962:             {isSummaryOpen && (
+2963:                 <DraggablePanel title="專案摘要 (Project Summary)" onClose={() => setShowSummaryPanel(false)} defaultSize={{w: 360, h: 'auto'}}>
+2964:                     <div className="flex flex-col num-font overflow-y-auto">
+2965: 
+2966:                     <div className="flex-1 overflow-y-auto p-6">
+2967:                         <div className="mb-6 border-b theme-border pb-4 z-40">
+2968:                             
+2969:                             <div className="space-y-3 mt-4">
+2970:                                 <SummaryRow label="專案名稱" value={inputs.projectName} />
+2971:                                 <SummaryRow label="工程預算" value={`${formatNum(res.estimatedBudget)} 萬`} highlight />
+2972:                                 <SummaryRow label="建築物高度" value={`${formatNum(massingLayers.totalHeight)} m`} />
+2973:                                 <SummaryRow label="模擬樓層" value={`${visualFloorsAbove} 層`} subtext="(含退縮)" />
+2974:                                 {showCheckLines && showHeightRatio && <SummaryRow label="高度比" value={formatNum(res.heightRatio, 2)} isAlert={res.isHighRise} alertText={res.isSuperHighRise ? "超高" : "高層"} />}
+2975:                                 <div className="pt-2 border-t theme-border mt-2">
+2976:                                     <div className="flex justify-between items-center mb-2">
+2977:                                         <span className="theme-text-muted text-sm font-medium">檢討線顯示</span>
+2978:                                         <div className="flex items-center gap-1">
+2979:                                             <button onClick={() => { if (!res.fallingCurveRequired) setShowCheckLines(!showCheckLines); }} disabled={res.fallingCurveRequired} className={`px-3 py-1 rounded-full border shadow-sm flex items-center gap-2 text-xs font-bold transition-colors theme-panel theme-border theme-text-muted ${res.fallingCurveRequired ? 'opacity-60 cursor-not-allowed' : ''}`}>{showCheckLines ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}{showCheckLines ? "開啟" : "關閉"}</button>
+2980:                                             {showCheckLines && (
+2981:                                                 <>
+2982:                                                     <button onClick={() => setShowHeightRatio(!showHeightRatio)} className={`px-3 py-1 rounded-full border shadow-sm flex items-center gap-2 text-xs font-bold transition-colors ${showHeightRatio ? 'bg-rose-50 border-rose-200 text-rose-600' : 'theme-panel theme-border theme-text-muted'}`} title="高度比檢討線">
+2983:                                                         {showHeightRatio ? <CheckSquare size={14} /> : <Square size={14} />} 高度比
+2984:                                                     </button>
+2985:                                                     <button onClick={() => setShowWeiLao(!showWeiLao)} className={`px-3 py-1 rounded-full border shadow-sm flex items-center gap-2 text-xs font-bold transition-colors ${showWeiLao ? 'bg-purple-50 border-purple-200 text-purple-600' : 'theme-panel theme-border theme-text-muted'}`} title="危老檢討線 (1:5)">
+2986:                                                         {showWeiLao ? <CheckSquare size={14} /> : <Square size={14} />} 危老
+2987:                                                     </button>
+2988:                                                     <button onClick={() => setShowBackyard(!showBackyard)} className={`px-3 py-1 rounded-full border shadow-sm flex items-center gap-2 text-xs font-bold transition-colors ${showBackyard ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'theme-panel theme-border theme-text-muted'}`} title="後院檢討線">
+2989:                                                         {showBackyard ? <CheckSquare size={14} /> : <Square size={14} />} 後院
+2990:                                                     </button>
+2991:                                                     {res.fallingCurveRequired && (
+2992:                                                         <button onClick={() => { if (!res.fallingCurveRequired) setShowFallingCurve(!showFallingCurve); }} disabled={res.fallingCurveRequired} className={`px-3 py-1 rounded-full border shadow-sm flex items-center gap-2 text-xs font-bold transition-colors ${showFallingCurve ? 'bg-amber-50 border-amber-200 text-amber-600' : 'theme-panel theme-border theme-text-muted'} ${res.fallingCurveRequired ? 'opacity-60 cursor-not-allowed' : ''}`} title="落物曲線檢討">
+2993:                                                             {showFallingCurve ? <CheckSquare size={14} /> : <Square size={14} />} 落物曲線
+2994:                                                         </button>
+2995:                                                     )}
+2996:                                                 </>
+2997:                                             )}
+2998:                                         </div>
+2999:                                     </div>
+3000:                                 </div>
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

@@ -1,0 +1,24 @@
+Created At: 2026-07-07T17:55:44Z
+Completed At: 2026-07-07T17:55:44Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 825
+Total Bytes: 43458
+Showing lines 810 to 825
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+810:                         setShowBackyard={setShowBackyard}
+811:                         isConstraintMode={isConstraintMode}
+812:                         setIsConstraintMode={setIsConstraintMode}
+813:                         onUnusedAreaChange={setUnusedArea}
+814:                         placementMode={placementMode}
+815:                         referenceEdge={referenceEdge}
+816:                         setReferenceEdge={setReferenceEdge}
+817:                         placementOffset={placementOffset}
+818:                         setPlacementOffset={setPlacementOffset}
+819:                         onConfirmPlacement={handleConfirmPlacement}
+820:                         onUpdateSiteGeometry={(geom) => handleUpdateSiteGeometry(activeSiteIndex, geom)}
+821:                         setActiveSiteIndex={setActiveSiteIndex}
+822:                         onAction={handleCanvasAction}
+823:                         activePanels={activePanels}
+824:                         togglePanel={togglePanel}
+825:                         appState={{ sites, setSites, activeSiteIndex, setActiveSiteIndex, inputs, overrides, lots, totalBaseArea, finalRes, combined, params, isEditMode, setIsEditMode, handleInputChange, handleOverride, handleParamChange, updateRoad, addRoad, removeRoad, addLot, removeLot, updateLot, showAddSiteDialog, setShowAddSiteDialog, handleAddSite: () => setShowAddSiteDialog(true) }}
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

@@ -1,0 +1,109 @@
+Created At: 2026-07-06T18:00:32Z
+Completed At: 2026-07-06T18:00:32Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1145
+Total Bytes: 81866
+Showing lines 200 to 300
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+200:                     };
+201:                     p2 = { 
+202:                         x: apA.x + (pt2.x * cosA - pt2.y * sinA), 
+203:                         y: apA.y + (pt2.x * sinA + pt2.y * cosA) 
+204:                     };
+205:                 }
+206:                 
+207:                 const dx = p2.x - p1.x;
+208:                 const dy = p2.y - p1.y;
+209:                 const L = Math.sqrt(dx*dx + dy*dy);
+210:                 if (L > 0.001) {
+211:                     const ptsA_pts = ptsA || [
+212:                         { x: -wA/2, y: -dA/2 }, { x: wA/2, y: -dA/2 },
+213:                         { x: wA/2, y: dA/2 }, { x: -wA/2, y: dA/2 }
+214:                     ];
+215:                     const sCentroidLocal = getPolygonCentroid(ptsA_pts);
+216:                     const sCentroid = {
+217:                         x: apA.x + (sCentroidLocal.x * cosA - sCentroidLocal.y * sinA),
+218:                         y: apA.y + (sCentroidLocal.x * sinA + sCentroidLocal.y * cosA)
+219:                     };
+220:                     
+221:                     const nx = -dy / L;
+222:                     const ny = dx / L;
+223:                     const vcx = (p1.x + p2.x)/2 - sCentroid.x;
+224:                     const vcy = (p1.y + p2.y)/2 - sCentroid.y;
+225:                     const dot = nx * vcx + ny * vcy;
+226:                     const rx = dot >= 0 ? nx : -nx;
+227:                     const ry = dot >= 0 ? ny : -ny;
+228:                     
+229:                     const roadOutP1 = { x: p1.x + rx * roadWidth, y: p1.y + ry * roadWidth };
+230:                     const roadOutP2 = { x: p2.x + rx * roadWidth, y: p2.y + ry * roadWidth };
+231:                     roadWorldPolygon = [p1, p2, roadOutP2, roadOutP1];
+232:                 }
+233:             }
+234:         }
+235: 
+236:         // 3. 精準檢查與所有現有基地是否重疊
+237:         let isColliding = false;
+238:         for (const s of sites) {
+239:             if (s.id === newSite.id) continue;
+240: 
+241:             const sGeom = s.baseGeometry?.points || s.basePoints;
+242:             let sLocalPts = [];
+243:             
+244:             const ew = parseFloat(s.inputs?.baseWidthM || s.inputs?.baseWidth) || Math.sqrt(s.inputs?.baseArea || 239);
+245:             const ed = parseFloat(s.inputs?.baseDepthM) || ((s.inputs?.baseArea || 239) / ew);
+246:             
+247:             if (sGeom && sGeom.length > 2) {
+248:                 sLocalPts = sGeom;
+249:             } else {
+250:                 sLocalPts = [
+251:                     { x: -ew/2, y: -ed/2 },
+252:                     { x: ew/2, y: -ed/2 },
+253:                     { x: ew/2, y: ed/2 },
+254:                     { x: -ew/2, y: ed/2 }
+255:                 ];
+256:             }
+257: 
+258:             const sPos = s.position || { x: 0, y: 0, rotation: 0 };
+259:             const cosS = Math.cos(sPos.rotation || 0);
+260:             const sinS = Math.sin(sPos.rotation || 0);
+261:             const worldPtsS = sLocalPts.map(p => ({
+262:                 x: sPos.x + (p.x * cosS - p.y * sinS),
+263:                 y: sPos.y + (p.x * sinS + p.y * cosS)
+264:             }));
+265: 
+266:             if (checkPolygonOverlap(worldPtsNew, worldPtsS)) {
+267:                 isColliding = true;
+268:                 break;
+269:             }
+270:         }
+271: 
+272:         // 4. 檢查與主要道路範圍是否重疊
+273:         if (!isColliding && roadWorldPolygon) {
+274:             if (checkPolygonOverlap(worldPtsNew, roadWorldPolygon)) {
+275:                 alert("放置位置侵佔了主要面前道路空間，請重新調整邊界或偏移量！");
+276:                 return;
+277:             }
+278:         }
+279: 
+280:         if (isColliding) {
+281:             alert("放置位置與現有基地重疊，請重新調整邊界或偏移量！");
+282:             return;
+283:         }
+284: 
+285:         // 5. 智慧面前道路對齊 (Smart Road Alignment)
+286:         if (siteA && siteA.inputs?.roads) {
+287:             const mainRoad = siteA.inputs.roads.find(r => r.type === 'primary') || siteA.inputs.roads[0];
+288:             if (mainRoad) {
+289:                 const ptsA = siteA.baseGeometry?.points || siteA.basePoints || null;
+290:                 const apA = siteA.position || { x: 0, y: 0 };
+291:                 let roadEdgeP1, roadEdgeP2;
+292:                 
+293:                 if (ptsA && ptsA.length > 2) {
+294:                     const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % ptsA.length;
+295:                     roadEdgeP1 = { x: ptsA[roadEdgeIdx].x + apA.x, y: ptsA[roadEdgeIdx].y + apA.y };
+296:                     roadEdgeP2 = { x: ptsA[(roadEdgeIdx + 1) % ptsA.length].x + apA.x, y: ptsA[(roadEdgeIdx + 1) % ptsA.length].y + apA.y };
+297:                 } else {
+298:                     const wA = parseFloat(siteA.inputs.baseWidthM || siteA.inputs.baseWidth) || Math.sqrt(siteA.inputs.baseArea || 239);
+299:                     const dA = parseFloat(siteA.inputs.baseDepthM) || ((siteA.inputs.baseArea || 239) / wA);
+300:                     const localA = [
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

@@ -1,0 +1,78 @@
+Created At: 2026-07-03T01:15:26Z
+Completed At: 2026-07-03T01:15:26Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1122
+Total Bytes: 75165
+Showing lines 451 to 520
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+451:                 
+452:                 const dx = p2.x - p1.x;
+453:                 const dy = p2.y - p1.y;
+454:                 const L = Math.sqrt(dx*dx + dy*dy);
+455:                 if (L > 0.001) {
+456:                     const ptsA_pts = ptsA || [
+457:                         { x: -wA/2, y: -dA/2 }, { x: wA/2, y: -dA/2 },
+458:                         { x: wA/2, y: dA/2 }, { x: -wA/2, y: dA/2 }
+459:                     ];
+460:                     const sCentroidLocal = getPolygonCentroid(ptsA_pts);
+461:                     const sCentroid = {
+462:                         x: apA.x + (sCentroidLocal.x * cosA - sCentroidLocal.y * sinA),
+463:                         y: apA.y + (sCentroidLocal.x * sinA + sCentroidLocal.y * cosA)
+464:                     };
+465:                     
+466:                     const nx = -dy / L;
+467:                     const ny = dx / L;
+468:                     const vcx = (p1.x + p2.x)/2 - sCentroid.x;
+469:                     const vcy = (p1.y + p2.y)/2 - sCentroid.y;
+470:                     const dot = nx * vcx + ny * vcy;
+471:                     const rx = dot >= 0 ? nx : -nx;
+472:                     const ry = dot >= 0 ? ny : -ny;
+473:                     
+474:                     const roadOutP1 = { x: p1.x + rx * roadWidth, y: p1.y + ry * roadWidth };
+475:                     const roadOutP2 = { x: p2.x + rx * roadWidth, y: p2.y + ry * roadWidth };
+476:                     roadWorldPolygon = [p1, p2, roadOutP2, roadOutP1];
+477:                 }
+478:             }
+479:         }
+480: 
+481:         // 精準檢查與所有現有基地是否重疊
+482:         let isColliding = false;
+483:         for (const s of sites) {
+484:             const sPos = s.position || { x: 0, y: 0, rotation: 0 };
+485:             const sGeom = s.baseGeometry?.points || s.basePoints;
+486:             let sLocalPts = [];
+487:             
+488:             const ew = parseFloat(s.inputs?.baseWidthM || s.inputs?.baseWidth) || Math.sqrt(s.inputs?.baseArea || 239);
+489:             const ed = parseFloat(s.inputs?.baseDepthM) || ((s.inputs?.baseArea || 239) / ew);
+490:             
+491:             if (sGeom && sGeom.length > 2) {
+492:                 sLocalPts = sGeom;
+493:             } else {
+494:                 sLocalPts = [
+495:                     { x: -ew/2, y: -ed/2 },
+496:                     { x: ew/2, y: -ed/2 },
+497:                     { x: ew/2, y: ed/2 },
+498:                     { x: -ew/2, y: ed/2 }
+499:                 ];
+500:             }
+501:             
+502:             const cosS = Math.cos(sPos.rotation || 0);
+503:             const sinS = Math.sin(sPos.rotation || 0);
+504:             const worldPtsS = sLocalPts.map(p => ({
+505:                 x: sPos.x + (p.x * cosS - p.y * sinS),
+506:                 y: sPos.y + (p.x * sinS + p.y * cosS)
+507:             }));
+508:             
+509:             if (checkPolygonOverlap(worldPtsNew, worldPtsS)) {
+510:                 isColliding = true;
+511:                 break;
+512:             }
+513:         }
+514: 
+515:         // 檢查與主要道路範圍是否重疊
+516:         if (!isColliding && roadWorldPolygon) {
+517:             if (checkPolygonOverlap(worldPtsNew, roadWorldPolygon)) {
+518:                 alert("快速新增位置侵佔了主要面前道路空間，請調整原基地朝向或手動精確放置！");
+519:                 return;
+520:             }
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

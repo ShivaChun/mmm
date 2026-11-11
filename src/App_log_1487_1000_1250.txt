@@ -1,0 +1,259 @@
+Created At: 2026-07-03T04:58:35Z
+Completed At: 2026-07-03T04:58:35Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1500
+Total Bytes: 77260
+Showing lines 1000 to 1250
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+1000:                             </h3>
+1001:                             <div className="text-white group-hover:scale-125 transition-transform">
+1002:                                 {showDetail ? <ChevronUp size={28} strokeWidth={3} /> : <ChevronDown size={28} strokeWidth={3} />}
+1003:                             </div>
+1004:                         </div>
+1005:                     </div>
+1006:                     
+1007:                     <div className={`transition-all duration-500 ease-in-out ${showDetail ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
+1008:                         <div className="theme-panel overflow-hidden border-8">
+1009:                             <div className="overflow-x-auto">
+1010:                                 <table className="w-full text-left border-collapse num-font bg-white">
+1011: 
+1012: 
+1013: 
+1014: 
+1015: 
+1016: 
+1017: 
+1018: 
+1019: 
+1020: 
+1021: 
+1022: 
+1023: 
+1024: 
+1025: 
+1026: 
+1027: 
+1028: 
+1029: 
+1030: 
+1031: 
+1032: 
+1033:                 </section>
+1034:                         </DraggablePanel>
+1035: 
+1036: 
+1037:                 {activePanel === 'results' && (
+1038:                     <DraggablePanel title="詳細計算表" onClose={() => setActivePanel(null)}>
+1039:                 {/* DATA TABLE SECTION */}
+1040: 
+1041: 
+1042: 
+1043: 
+1044:                 </section>
+1045:                 </section>
+1046:                         </FloatingPanel>
+1047:                     </div>
+1048: 
+1049:                 {activePanel === 'results' && (
+1050:                 </section>
+1051:                         </FloatingPanel>
+1052:                     </div>
+1053:                 {/* DATA TABLE SECTION */}
+1054: 
+1055:                 {activePanel === 'results' && (
+1056:                     <div className="pointer-events-auto">
+1057:                     <FloatingPanel title="詳細計算表" onClose={() => setActivePanel(null)}>
+1058:                 {/* DATA TABLE SECTION */}
+1059: 
+1060:                 </section>
+1061:                         </DraggablePanel>
+1062: 
+1063: 
+1064:                 {activePanels.includes('results') && (
+1065:                     <DraggablePanel title="詳細計算表" onClose={() => togglePanel('results')} defaultSize={{ w: 800, h: 650 }}>
+1066:                 {/* DATA TABLE SECTION */}
+1067: 
+1068: 
+1069: 
+1070: 
+1071: 
+1072: 
+1073: 
+1074: 
+1075: 
+1076: 
+1077: 
+1078: 
+1079: 
+1080: 
+1081: 
+1082: 
+1083: 
+1084: 
+1085: 
+1086: 
+1087: 
+1088: 
+1089: 
+1090: 
+1091: 
+1092: 
+1093: 
+1094: 
+1095: 
+1096: 
+1097: 
+1098: 
+1099: 
+1100: 
+1101: 
+1102: 
+1103: 
+1104: 
+1105: 
+1106: 
+1107: 
+1108: 
+1109: 
+1110: 
+1111: 
+1112: 
+1113: 
+1114: 
+1115: 
+1116: 
+1117: 
+1118: 
+1119: 
+1120: 
+1121: 
+1122: 
+1123: 
+1124: 
+1125: 
+1126: 
+1127: 
+1128: 
+1129: 
+1130:                 </section>
+1131: </FloatingPanel>
+1132:                     </div>
+1133:                 )}
+1134: 
+1135:                 {activePanel === 'results' && (
+1136:                     <div className="pointer-events-auto">
+1137:                     <FloatingPanel title="詳細計算表" onClose={() => setActivePanel(null)} widthClass="w-[95vw] md:w-[800px] lg:w-[1000px] xl:w-[1280px] max-w-7xl">
+1138:                 {/* DATA TABLE SECTION */}
+1139: 
+1140: 
+1141:                 </section>
+1142:                     </FloatingPanel>
+1143:                     </div>
+1144:                 )}
+1145: 
+1146:                 {/* COMBINED REVIEW TABLE (shown when activePanel === 'combined') */}
+1147:                 {activePanel === 'combined' && sites.length > 1 && (
+1148:                     <div className="pointer-events-auto">
+1149: 
+1150: 
+1151: 
+1152: 
+1153: 
+1154: 
+1155: 
+1156:                                             {isEditMode && <><td className="p-6 font-black text-xs theme-text-muted bg-stone-50 bo
+1157: 
+1158: 
+1159:                                             <td className="p-6 pl-10 border-l-8 border-black font-bold">13. 地下層開挖檢
+1160: 
+1161: 
+1162: 
+1163: 
+1164: 
+1165: 
+1166: 
+1167: 
+1168: 
+1169: 
+1170: 
+1171: 
+1172: 
+1173: 
+1174: 
+1175: 
+1176: 
+1177: 
+1178: 
+1179: 
+1180: 
+1181: 
+1182: 
+1183: 
+1184: 
+1185: 
+1186: 
+1187: 
+1188: 
+1189: 
+1190: 
+1191: 
+1192: 
+1193: 
+1194: 
+1195: 
+1196: 
+1197: 
+1198: 
+1199: 
+1200:                             >
+1201:                                 <h3 className="text-2xl font-black text-white flex items-center gap-3">
+1202:                                     <MapPinned size={24} strokeWidth={3} /> 整體合併容積檢討表
+1203:                                 </h3>
+1204:                                 <div className="text-white group-hover:scale-125 transition-transform">
+1205:                                     {showCombinedTable ? <ChevronUp size={28} strokeWidth={3} /> : <ChevronDown size={28} strokeWidth={3} />}
+1206:                                 </div>
+1207:                             </div>
+1208:                         </div>
+1209: 
+1210:                         <div className={`transition-all duration-500 ease-in-out ${showCombinedTable ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
+1211:                             <div className="theme-panel overflow-hidden border-8">
+1212:                                 <div className="overflow-x-auto">
+1213:                                     <table className="w-full text-left border-collapse num-font bg-white">
+1214:                                         <thead>
+1215:                                             <tr className="bg-emerald-800 text-white border-b-8 border-emerald-900">
+1216:                                                 <th className="p-6 text-xl font-black uppercase">整體合併項目</th>
+1217:                                                 <th className="p-6 text-xl font-black uppercase text-right">數值 (㎡)</th>
+1218:                                                 <th className="p-6 text-xl font-black uppercase text-right">坪數 (坪)</th>
+1219:                                             </tr>
+1220:                                         </thead>
+1221:                                         <tbody className="divide-y-4 divide-emerald-200">
+1222:                                             <tr className="bg-emerald-900 text-white">
+1223:                                                 <td colSpan={3} className="p-4 pl-10 font-black text-sm uppercase tracking-widest">各基地允建 CFA 摘要</td>
+1224:                                             </tr>
+1225:                                             {siteResults.map((sr, i) => (
+1226:                                                 <tr key={sr.siteId} className="hover:bg-stone-50 transition-colors">
+1227:                                                     <td className="p-6 pl-10 border-l-8 border-emerald-500 font-bold">
+1228:                                                         {sites[i].name}
+1229:                                                         <span className="ml-2 text-xs text-stone-400">
+1230:                                                             (建蔽 {sites[i].inputs.coverageRatio}% / 容積 {sites[i].inputs.floorRatio}%)
+1231:                                                         </span>
+1232:                                                     </td>
+1233:                                                     <td className="p-6 text-right font-black text-lg">{formatNum(sr.finalRes.totalCFA)}</td>
+1234:                                                     <td className="p-6 text-right font-black text-lg text-stone-500">{formatNum(toPing(sr.finalRes.totalCFA))}</td>
+1235:                                                 </tr>
+1236:                                             ))}
+1237: 
+1238:                                             <tr className="bg-emerald-900 text-white">
+1239:                                                 <td colSpan={3} className="p-4 pl-10 font-black text-sm uppercase tracking-widest">合計彙總</td>
+1240:                                             </tr>
+1241:                                             <tr className="hover:bg-stone-50">
+1242:                                                 <td className="p-6 pl-10 border-l-8 border-emerald-500 font-bold">合計基地面積</td>
+1243:                                                 <td className="p-6 text-right font-black text-xl">{formatNum(combined.totalBase)}</td>
+1244:                                                 <td className="p-6 text-right font-black text-stone-500">{formatNum(toPing(combined.totalBase))}</td>
+1245:                                             </tr>
+1246:                                             <tr className="hover:bg-stone-50">
+1247:                                                 <td className="p-6 pl-10 border-l-8 border-emerald-500 font-bold">合計允建建築面積</td>
+1248:                                                 <td className="p-6 text-right font-black text-xl">{formatNum(combined.totalMaxBuildingArea)}</td>
+1249:                                                 <td className="p-6 text-right font-black text-stone-500">{formatNum(toPing(combined.totalMaxBuildingArea))}</td>
+1250:                                             </tr>
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

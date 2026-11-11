@@ -1,0 +1,309 @@
+Created At: 2026-07-03T04:58:54Z
+Completed At: 2026-07-03T04:58:54Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1500
+Total Bytes: 77260
+Showing lines 700 to 1000
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+700:                                 name="projectName" 
+701:                                 value={inputs.projectName} 
+702:                                 onChange={handleInputChange} 
+703:                                 placeholder="輸入專案名稱" 
+704:                                 className="border-b-4 border-[var(--border-strong)] focus:border-[var(--text-accent)] outline-none bg-transparent py-2 text-xl font-black theme-text placeholder:text-stone-400" 
+705:                             />
+706:                         </div>
+707:                         <div className="grid grid-cols-1 gap-4">
+708:                             <div>
+709:                                 <label className={labelClass}>縣市區域</label>
+710:                                 <input type="text" name="district" value={inputs.district} onChange={handleInputChange} className={inputClass} />
+711:                             </div>
+712:                             <div>
+713:                                 <label className={labelClass}>土地使用分區</label>
+714:                                 <input type="text" name="zoneType" value={inputs.zoneType} onChange={handleInputChange} className={inputClass} />
+715:                             </div>
+716:                             <div>
+717:                                 <label className={labelClass}>適用都市計畫</label>
+718:                                 <input type="text" name="urbanPlanName" value={inputs.urbanPlanName} onChange={handleInputChange} className={inputClass} />
+719:                             </div>
+720:                         </div>
+721:                         
+722:                         <div className="grid grid-cols-2 gap-4">
+723:                             <div>
+724:                                 <label className={labelClass}>法定建蔽率 (%)</label>
+725:                                 <input type="number" name="coverageRatio" value={inputs.coverageRatio} onChange={handleInputChange} className={inputClass} />
+726:                             </div>
+727:                             <div>
+728:                                 <label className={labelClass}>法定容積率 (%)</label>
+729:                                 <input type="number" name="floorRatio" value={inputs.floorRatio} onChange={handleInputChange} className={inputClass} />
+730:                             </div>
+731:                         </div>
+732:                     </div>
+733:                 </DraggablePanel>
+734:             )}
+735: 
+736:             {activePanels.includes('sites') && (
+737:                 <DraggablePanel title="基地管理" onClose={() => setActivePanels(prev => prev.filter(p => p !== 'sites'))} defaultSize={{w: 360, h: 400}}>
+738:                     <div className="space-y-4">
+739:                         <div className="flex items-center gap-2 flex-wrap mb-4">
+740:                             {sites.map((site, idx) => (
+741:                                 <button 
+742:                                     key={site.id} 
+743:                                     onClick={() => setActiveSiteIndex(idx)} 
+744:                                     className={`px-4 py-2 font-black transition-all border-4 ${activeSiteIndex === idx ? 'theme-btn-active scale-105 shadow-[4px_4px_0_#111]' : 'theme-btn border-transparent opacity-70 hover:opacity-100 hover:border-black'}`}
+745:                                 >
+746:                                     {site.name}
+747:                                 </button>
+748:                             ))}
+749:                             <button onClick={() => setShowAddSiteDialog(true)} className="px-3 py-2 border-4 border-dashed border-[var(--border-strong)] text-[var(--text-muted)] hover:border-black hover:text-black font-black transition-colors rounded-none flex items-center gap-1">
+750:                                 <Plus size={20} strokeWidth={3} /> 新增
+751:                             </button>
+752:                         </div>
+753:                         {sites.length > 1 && (
+754:                             <button onClick={() => handleRemoveSite(activeSite.id)} className="w-full flex items-center justify-center gap-2 p-3 border-4 border-red-200 bg-red-50 text-red-600 font-black hover:bg-red-600 hover:text-white hover:border-red-700 transition-colors">
+755:                                 <Trash2 size={20} strokeWidth={3} /> 刪除當前基地
+756:                             </button>
+757:                         )}
+758:                     </div>
+759:                 </DraggablePanel>
+760:             )}
+761: 
+762:             {activePanels.includes('summary') && (
+763:                 <DraggablePanel title="評估結果" onClose={() => setActivePanels(prev => prev.filter(p => p !== 'summary'))} defaultSize={{w: 500, h: 700}}>
+764:                     <div className="space-y-6">
+765:                         <div className="grid grid-cols-2 gap-4">
+766:                             <div className="p-4 border-4 border-black bg-stone-50">
+767:                                 <div className="text-xs font-black text-stone-500 mb-1">總銷售坪數</div>
+768:                                 <div className="text-3xl font-black text-[var(--text-accent)] num-font">{formatNum(toPing(finalRes.totalSaleable))} <span className="text-sm text-stone-600">坪</span></div>
+769:                             </div>
+770:                             <div className="p-4 border-4 border-black bg-stone-50">
+771:                                 <div className="text-xs font-black text-stone-500 mb-1">容積單價</div>
+772:                                 <div className="text-3xl font-black text-emerald-600 num-font">{formatNum((finalRes.totalSaleable / (finalRes.base * (inputs.floorRatio/100))).toFixed(2))} <span className="text-sm text-stone-600">坪/容積</span></div>
+773:                             </div>
+774:                         </div>
+775:                         <table className="w-full text-sm border-collapse border-4 border-black bg-white shadow-[4px_4px_0_#111]">
+776:                             <tbody>
+777:                                 <InputRow id="totalCFA" label="總樓地板面積" value={finalRes.totalCFA} />
+778:                                 <InputRow id="totalSaleable" label="總銷售面積" value={finalRes.totalSaleable} highlight={true} />
+779:                                 <InputRow id="balconyArea" label="陽台面積" value={finalRes.balconyArea} />
+780:                                 <InputRow id="totalCarArea" label="停車空間面積" value={finalRes.totalCarArea} />
+781:                             </tbody>
+782:                         </table>
+783:                     </div>
+784:                 </DraggablePanel>
+785:             )}
+786:             
+787:             {showAddSiteDialog && (
+788:                 <div className="fixed inset-0 z-[100] flex items-center justify-center">
+789:                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowAddSiteDialog(false)} />
+790:                     <div className="relative bg-white shadow-2xl border-4 border-black p-8 max-w-md w-full mx-4">
+791:                         <button onClick={() => setShowAddSiteDialog(false)} className="absolute top-4 right-4 text-stone-400 hover:text-black"><X size={20} /></button>
+792:                         <h3 className="text-2xl font-black mb-2 flex items-center gap-3"><MapPinned size={24} className="text-[var(--text-accent)]" /> 新增基地</h3>
+793:                         <p className="text-sm text-stone-500 mb-6">是否緊貼 <span className="font-black text-black">{activeSite.name}</span>？</p>
+794:                         <div className="space-y-3">
+795:                             <button onClick={() => handleAddSite('back')} className="w-full p-4 border-4 border-black font-bold hover:bg-stone-100 text-left flex items-center gap-3 transition-colors">🔗 緊貼後方（背面）</button>
+796:                             <button onClick={() => handleAddSite('left')} className="w-full p-4 border-4 border-black font-bold hover:bg-stone-100 text-left flex items-center gap-3 transition-colors">🔗 緊貼左側</button>
+797:                             <button onClick={() => handleAddSite('right')} className="w-full p-4 border-4 border-black font-bold hover:bg-stone-100 text-left flex items-center gap-3 transition-colors">🔗 緊貼右側</button>
+798:                             <div className="border-t-4 border-stone-200 my-2" />
+799:                             <button onClick={() => handleAddSite('free')} className="w-full p-4 border-4 border-dashed border-stone-400 font-bold hover:bg-stone-50 text-left flex items-center gap-3 text-stone-600 transition-colors">📍 獨立放置（不緊貼）</button>
+800:                         </div>
+801:                         onUpdateInputs={handleUpdateInputs}
+802:                         onUpdateSiteSetting={handleUpdateSiteSetting}
+803:                         showCheckLines={showCheckLines}
+804:                         setShowCheckLines={setShowCheckLines}
+805:                         showHeightRatio={showHeightRatio}
+806:                         setShowHeightRatio={setShowHeightRatio}
+807:                         showWeiLao={showWeiLao}
+808:                         setShowWeiLao={setShowWeiLao}
+809:                         showBackyard={showBackyard}
+810:                         setShowBackyard={setShowBackyard}
+811:                         isConstraintMode={isConstraintMode}
+812:                         setIsConstraintMode={setIsConstraintMode}
+813:                         onUnusedAreaChange={setUnusedArea}
+814:                         placementMode={placementMode}
+815:                         referenceEdge={referenceEdge}
+816:                         setReferenceEdge={setReferenceEdge}
+817:                         placementOffset={placementOffset}
+818:                         setPlacementOffset={setPlacementOffset}
+819:                         onConfirmPlacement={handleConfirmPlacement}
+820:                         onUpdateSiteGeometry={(geom) => handleUpdateSiteGeometry(activeSiteIndex, geom)}
+821:                         setActiveSiteIndex={setActiveSiteIndex}
+822:                         onAction={handleCanvasAction}
+823:                         activePanels={activePanels}
+824:                         togglePanel={togglePanel}
+825:                         appState={{ sites, setSites, activeSiteIndex, setActiveSiteIndex, inputs, overrides, lots, totalBaseArea, finalRes, combined, params, isEditMode, setIsEditMode, handleInputChange, handleOverride, handleParamChange, updateRoad, addRoad, removeRoad, addLot, removeLot, updateLot, showAddSiteDialog, setShowAddSiteDialog, handleAddSite: () => setShowAddSiteDialog(true) }}
+826:                             </div>
+827:                         )}
+828:                     </div>
+829:                 </section>
+830: 
+831:                 {/* INFO & PLANNING SECTION */}
+832:                 <section className="space-y-4">
+833:                     <div className="theme-panel bg-[var(--text-primary)] p-0">
+834:                         <div 
+835:                             className="p-6 flex justify-between items-center cursor-pointer hover:bg-[var(--text-accent)] transition-colors group" 
+836:                             onClick={() => setShowBasePanels(!showBasePanels)}
+837:                         >
+838:                             <h3 className="text-2xl font-black text-white flex items-center gap-3">
+839:                                 <Layers size={24} strokeWidth={3} /> 基本資訊與規劃
+840:                             </h3>
+841:                             <div className="text-white group-hover:scale-125 transition-transform">
+842:                                 {showBasePanels ? <ChevronUp size={28} strokeWidth={3} /> : <ChevronDown size={28} strokeWidth={3} />}
+843:                             </div>
+844:                         </div>
+845:                     </div>
+846: 
+847:                     <div className={`transition-all duration-500 ease-in-out ${showBasePanels ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
+848:                         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+849:                             <CollapsibleSection title="基本資料" icon={<MapPin size={20} className="text-[var(--text-accent)]" />} className="xl:col-span-1 theme-panel p-6 bg-white">
+850:                                 <div className="space-y-6">
+851:                                     <div>
+852:                                         <label className={labelClass}>行政區</label>
+853:                                         <input type="text" name="district" value={inputs.district} onChange={handleInputChange} className={inputClass} />
+854:                                     </div>
+855:                                     <div className="space-y-4">
+856:                                         <div className="flex justify-between items-center border-b-4 border-[var(--border-strong)] pb-2">
+857:                                             <label className={labelClass}>地號與面積 (㎡)</label>
+858:                                             <button onClick={addLot} className="font-black text-[var(--text-accent)] hover:scale-110 transition-transform flex items-center gap-1">
+859:                                                 <Plus size={16} strokeWidth={3} /> 新增
+860:                                             </button>
+861:                         </div>
+862:                     </div>
+863: 
+864:                     <div className={`transition-all duration-500 ease-in-out ${showBasePanels ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden'}`}>
+865:                         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+866:                             <CollapsibleSection title="基本資料" icon={<MapPin size={20} className="text-[var(--text-accent)]" />} className="xl:col-span-1 theme-panel p-6 bg-white">
+867:                                 <div className="space-y-6">
+868:                                     <div>
+869:                                         <label className={labelClass}>行政區</label>
+870:                                         <input type="text" name="district" value={inputs.district} onChange={handleInputChange} className={inputClass} />
+871:                                     </div>
+872:                                     <div className="space-y-4">
+873:                                         <div className="flex justify-between items-center border-b-4 border-[var(--border-strong)] pb-2">
+874:                                             <label className={labelClass}>地號與面積 (㎡)</label>
+875:                                             <button onClick={addLot} className="font-black text-[var(--text-accent)] hover:scale-110 transition-transform flex items-center gap-1">
+876:                                                 <Plus size={16} strokeWidth={3} /> 新增
+877:                                             </button>
+878:                                         </div>
+879:                                         <div className="max-h-60 overflow-y-auto pr-2 space-y-3 thin-scrollbar">
+880:                                             {lots.map(l => (
+881:                                                 <div key={l.id} className="flex gap-2 items-center">
+882:                                                     <input type="text" placeholder="地號" value={l.lot} onChange={(e) => updateLot(l.id, 'lot', e.target.value)} className={`${inputClass} text-xs`} />
+883:                                                     <input type="number" placeholder="面積" value={l.area} onChange={(e) => updateLot(l.id, 'area', e.target.value)} className={`${inputClass} text-xs w-28 text-right`} />
+884:                                                     {lots.length > 1 && (
+885:                                                         <button onClick={() => removeLot(l.id)} className="p-2 border-2 border-[var(--border-strong)] hover:bg-red-500 hover:text-white transition-colors">
+886:                                                             <Trash2 size={16} />
+887:                                                         </button>
+888:                                                     )}
+889:                                                 </div>
+890:                                             ))}
+891:                                         </div>
+892:                                         <div className="text-right text-lg font-black bg-[var(--text-primary)] text-white p-2">
+893:                                             合計: {formatNum(totalBaseArea)} ㎡ ({formatNum(toPing(totalBaseArea))} 坪)
+894:                                         </div>
+895:                                     </div>
+896:                                     
+897:                                     <div className="space-y-4 pt-6 mt-6 border-t-8 border-[var(--border-strong)]">
+898:                                         <div className="flex justify-between items-center">
+899:                                             <label className={labelClass}>臨路狀況</label>
+900:                                             <button onClick={addRoad} className="font-black text-[var(--text-accent)] hover:scale-110 transition-transform flex items-center gap-1">
+901:                                                 <Plus size={16} strokeWidth={3} /> 新增道路
+902:                                             </button>
+903:                                         </div>
+904:                                         <div className="space-y-3">
+905:                                             {inputs.roads.map(r => (
+906:                                                 <div key={r.id} className="theme-panel p-4 bg-stone-100 border-2">
+907:                                                     <div className="grid grid-cols-2 gap-3 mb-3">
+908:                                                         <div>
+909:                                                             <label className="text-[10px] font-black uppercase">路名</label>
+910:                                                             <input type="text" value={r.name} onChange={(e) => updateRoad(r.id, 'name', e.target.value)} className={`${inputClass} py-1 text-xs`} />
+911:                                                         </div>
+912:                                                         <div>
+913:                                                             <label className="text-[10px] font-black uppercase text-center block">寬(M)</label>
+914:                                                             <input type="number" value={r.width} onChange={(e) => updateRoad(r.id, 'width', e.target.value)} className={`${inputClass} py-1 text-xs text-center`} />
+915:                                                         </div>
+916:                                                     </div>
+917:                                                     <div className="flex justify-between items-center">
+918:                                                         <div className="text-[10px] font-black uppercase p-1 bg-white border border-black">
+919:                                                             方位: {r.edgeIndex !== undefined ? `邊線 ${r.edgeIndex}` : r.orientation}
+920:                                                         </div>
+921:                                                         <div className="flex items-center gap-4">
+922:                                                             <label className="flex items-center gap-2 text-xs font-black cursor-pointer">
+923:                                                                 <input type="checkbox" checked={r.type === 'primary'} onChange={(e) => updateRoad(r.id, 'type', e.target.checked ? 'primary' : 'secondary')} className="w-5 h-5 border-4 border-black checked:bg-black rounded-none appearance-none checked:after:content-['✓'] after:text-white after:flex after:justify-center after:items-center" />
+924:                                                                 主要道路
+925:                                                             </label>
+926:                                                             {inputs.roads.length > 1 && (
+927:                                                                 <button onClick={() => removeRoad(r.id)} className="text-red-500 hover:scale-125 transition-transform"><Trash2 size={18} /></button>
+928:                                                             )}
+929:                                                         </div>
+930:                                                     </div>
+931:                                                 </div>
+932:                                             ))}
+933:                                         </div>
+934:                                     </div>
+935:                                 </div>
+936:                             </CollapsibleSection>
+937: 
+938:                             <CollapsibleSection title="法規參數" icon={<FileText size={20} className="text-sky-500" />} className="xl:col-span-1 theme-panel p-6 bg-white">
+939:                                 <div className="space-y-6">
+940:                                     <div><label className={labelClass}>使用分區</label><input type="text" name="zoneType" value={inputs.zoneType} onChange={handleInputChange} className={inputClass} /></div>
+941:                                     <div><label className={labelClass}>都市計畫名稱</label><input type="text" name="urbanPlanName" value={inputs.urbanPlanName} onChange={handleInputChange} className={inputClass} /></div>
+942:                                     <div className="grid grid-cols-2 gap-4">
+943:                                         <div className="bg-sky-50 p-3 border-2 border-sky-500">
+944:                                             <label className={`${labelClass} text-sky-700`}>建蔽率 (%)</label>
+945:                                             <input type="number" name="coverageRatio" value={inputs.coverageRatio} onChange={handleInputChange} className={`${inputClass} font-black text-sky-800 border-sky-400 bg-sky-50`} />
+946:                                         </div>
+947:                                         <div className="bg-sky-50 p-3 border-2 border-sky-500">
+948:                                             <label className={`${labelClass} text-sky-700`}>容積率 (%)</label>
+949:                                             <input type="number" name="floorRatio" value={inputs.floorRatio} onChange={handleInputChange} className={`${inputClass} font-black text-sky-800 border-sky-400 bg-sky-50`} />
+950:                                         </div>
+951:                                     </div>
+952:                                     <div className="bg-amber-50 p-4 border-2 border-amber-500">
+953:                                         <label className={`${labelClass} text-amber-700`}>地下室開挖率 (%)</label>
+954:                                         <input type="number" name="excavationRatio" value={inputs.excavationRatio} onChange={handleInputChange} className={`${inputClass} font-black text-amber-800 border-amber-400 bg-amber-50`} />
+955:                                     </div>
+956:                                 </div>
+957:                             </CollapsibleSection>
+958: 
+959:                             <CollapsibleSection title="樓層規劃" icon={<Layers size={20} className="text-indigo-500" />} className="xl:col-span-1 theme-panel p-6 bg-white">
+960:                                 <div className="space-y-6">
+961:                                     <div className="grid grid-cols-2 gap-4">
+962:                                         <div className="theme-panel p-4 bg-indigo-50 border-indigo-200">
+963:                                             <label className={`${labelClass} text-indigo-700`}>地上樓層數</label>
+964:                                             <div className="text-4xl font-black text-indigo-900 flex flex-col">
+965:                                                 <span>{finalRes.floorsAbove}F</span>
+966:                                                 <span className="text-[10px] font-bold text-indigo-400 mt-1 uppercase">自動估算結果</span>
+967:                                             </div>
+968:                                         </div>
+969:                                         <div className="theme-panel p-4">
+970:                                             <label className={labelClass}>地下樓層數</label>
+971:                                             <input type="number" name="floorsBelow" value={inputs.floorsBelow} onChange={handleInputChange} className={inputClass} />
+972:                                         </div>
+973:                                     </div>
+974:                                     <div className="theme-panel p-6 bg-[var(--text-primary)] text-white shadow-[8px_8px_0_var(--text-accent)] transform -rotate-1">
+975:                                         <label className="text-xs font-black uppercase text-[var(--text-accent)] mb-2 block">允建總樓地板面積 (Total CFA)</label>
+976:                                         <div className="text-4xl font-black text-right border-b-4 border-[var(--text-accent)] pb-2 flex justify-between items-baseline">
+977:                                             <span className="text-xs font-bold text-white/50">SQM</span>
+978:                                             {formatNum(finalRes.totalCFA)}
+979:                                         </div>
+980:                                         <div className="text-xl font-black text-right mt-2 text-[var(--text-accent)] flex justify-between items-baseline">
+981:                                             <span className="text-xs font-bold text-white/50 uppercase">Pings</span>
+982:                                             {formatNum(toPing(finalRes.totalCFA))} 坪
+983:                                         </div>
+984:                                     </div>
+985:                                 </div>
+986:                             </CollapsibleSection>
+987:                         </div>
+988:                     </div>
+989:                 </section>
+990: 
+991:                 {/* DATA TABLE SECTION */}
+992:                 <section className="space-y-4">
+993:                     <div className="theme-panel bg-[var(--text-primary)] p-0">
+994:                         <div 
+995:                             className="p-6 flex justify-between items-center cursor-pointer hover:bg-[var(--text-accent)] transition-colors group" 
+996:                             onClick={() => setShowDetail(!showDetail)}
+997:                         >
+998:                             <h3 className="text-2xl font-black text-white flex items-center gap-3">
+999:                                 <FileText size={24} strokeWidth={3} /> 詳細計算表
+1000:                             </h3>
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

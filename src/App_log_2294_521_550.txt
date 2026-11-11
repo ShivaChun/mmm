@@ -1,0 +1,38 @@
+Created At: 2026-07-03T01:15:28Z
+Completed At: 2026-07-03T01:15:28Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1122
+Total Bytes: 75165
+Showing lines 521 to 550
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+521:         }
+522: 
+523:         if (isColliding) {
+524:             alert("快速新增位置與現有基地重疊，請調整原基地朝向或手動精確放置！");
+525:             return;
+526:         }
+527: 
+528:         // 智慧面前道路對齊 (Smart Road Alignment) for 快速新增
+529:         if (siteA && siteA.inputs?.roads) {
+530:             const mainRoad = siteA.inputs.roads.find(r => r.type === 'primary') || siteA.inputs.roads[0];
+531:             if (mainRoad) {
+532:                 const roadEdgeP1 = roadWorldPolygon ? roadWorldPolygon[0] : { x: 0, y: 0 };
+533:                 const roadEdgeP2 = roadWorldPolygon ? roadWorldPolygon[1] : { x: 0, y: 0 };
+534:                 const roadMid = { x: (roadEdgeP1.x + roadEdgeP2.x) / 2, y: (roadEdgeP1.y + roadEdgeP2.y) / 2 };
+535:                 
+536:                 let minDst = Infinity;
+537:                 let bestEdgeIdx = 2;
+538:                 
+539:                 for (let j = 0; j < 4; j++) {
+540:                     const p1 = worldPtsNew[j];
+541:                     const p2 = worldPtsNew[(j + 1) % 4];
+542:                     const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+543:                     const dst = Math.pow(mid.x - roadMid.x, 2) + Math.pow(mid.y - roadMid.y, 2);
+544:                     if (dst < minDst) {
+545:                         minDst = dst;
+546:                         bestEdgeIdx = j;
+547:                     }
+548:                 }
+549:                 
+550:                 newSite.inputs.roads = [{
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

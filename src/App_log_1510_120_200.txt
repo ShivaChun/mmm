@@ -1,0 +1,89 @@
+Created At: 2026-07-07T17:55:11Z
+Completed At: 2026-07-07T17:55:11Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 825
+Total Bytes: 43458
+Showing lines 120 to 200
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+120:     const handleConfirmPlacement = () => {
+121:         const newIdx = sites.length;
+122:         const label = SITE_LABELS[newIdx] || String(newIdx + 1);
+123:         const newSite = createDefaultSite(`基地 ${label}`, Date.now(), false);
+124:         
+125:         const activeSite = sites[activeSiteIndex] || sites[0];
+126:         
+127:         // 擴充包含 rotation
+128:         let position = {
+129:             x: parseFloat(placementOffset.x || 0),
+130:             y: parseFloat(placementOffset.y || 0),
+131:             rotation: parseFloat(placementOffset.rotation || 0)
+132:         };
+133: 
+134:         // 1. 計算新基地的 Local -> 世界坐標多邊形頂點
+135:         const wNew = parseFloat(activeSite.inputs?.baseWidthM || activeSite.inputs?.baseWidth) || Math.sqrt(activeSite.inputs?.baseArea || 239);
+136:         const dNew = parseFloat(activeSite.inputs?.baseDepthM) || ((activeSite.inputs?.baseArea || 239) / wNew);
+137:         
+138:         newSite.inputs = {
+139:             ...activeSite.inputs,
+140:             projectName: activeSite.inputs.projectName || '',
+141:             baseWidth: activeSite.inputs.baseWidth,
+142:             baseWidthM: activeSite.inputs.baseWidthM,
+143:             baseDepthM: activeSite.inputs.baseDepthM,
+144:             baseArea: activeSite.inputs.baseArea,
+145:             roads: [] // 新基地不自帶實體道路，共享道路系統
+146:         };
+147: 
+148:         const localPts = [
+149:             { x: -wNew/2, y: -dNew/2 },
+150:             { x: wNew/2, y: -dNew/2 },
+151:             { x: wNew/2, y: dNew/2 },
+152:             { x: -wNew/2, y: dNew/2 }
+153:         ];
+154:         const cos = Math.cos(position.rotation);
+155:         const sin = Math.sin(position.rotation);
+156:         const worldPtsNew = localPts.map(p => ({
+157:             x: position.x + (p.x * cos - p.y * sin),
+158:             y: position.y + (p.x * sin + p.y * cos)
+159:         }));
+160: 
+161:         // 2. 計算主基地 A 主要道路的世界坐標多邊形，以做道路重疊檢測
+162:         let roadWorldPolygon = null;
+163:         const siteA = sites[0];
+164:         const apA = siteA.position || { x: 0, y: 0, rotation: 0 };
+165:         const cosA = Math.cos(apA.rotation || 0);
+166:         const sinA = Math.sin(apA.rotation || 0);
+167:         const wA = parseFloat(siteA.inputs.baseWidthM || siteA.inputs.baseWidth) || Math.sqrt(siteA.inputs.baseArea || 239);
+168:         const dA = parseFloat(siteA.inputs.baseDepthM) || ((siteA.inputs.baseArea || 239) / wA);
+169: 
+170:         if (siteA && siteA.inputs?.roads) {
+171:             const mainRoad = siteA.inputs.roads.find(r => r.type === 'primary') || siteA.inputs.roads[0];
+172:             if (mainRoad) {
+173:                 const roadWidth = parseFloat(mainRoad.width) || 6;
+174:                 const ptsA = siteA.baseGeometry?.points || siteA.basePoints || null;
+175:                 let p1, p2;
+176:                 
+177:                 if (ptsA && ptsA.length > 2) {
+178:                     const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % ptsA.length;
+179:                     const pt1 = ptsA[roadEdgeIdx];
+180:                     const pt2 = ptsA[(roadEdgeIdx + 1) % ptsA.length];
+181:                     p1 = { 
+182:                         x: apA.x + (pt1.x * cosA - pt1.y * sinA), 
+183:                         y: apA.y + (pt1.x * sinA + pt1.y * cosA) 
+184:                     };
+185:                     p2 = { 
+186:                         x: apA.x + (pt2.x * cosA - pt2.y * sinA), 
+187:                         y: apA.y + (pt2.x * sinA + pt2.y * cosA) 
+188:                     };
+189:                 } else {
+190:                     const localA = [
+191:                         { x: -wA/2, y: -dA/2 }, { x: wA/2, y: -dA/2 },
+192:                         { x: wA/2, y: dA/2 }, { x: -wA/2, y: dA/2 }
+193:                     ];
+194:                     const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % 4;
+195:                     const pt1 = localA[roadEdgeIdx];
+196:                     const pt2 = localA[(roadEdgeIdx + 1) % 4];
+197:                     p1 = { 
+198:                         x: apA.x + (pt1.x * cosA - pt1.y * sinA), 
+199:                         y: apA.y + (pt1.x * sinA + pt1.y * cosA) 
+200:                     };
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

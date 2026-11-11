@@ -1,0 +1,29 @@
+Created At: 2026-07-03T01:16:11Z
+Completed At: 2026-07-03T01:16:12Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1122
+Total Bytes: 75242
+Showing lines 90 to 110
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+90:     const [showCheckLines, setShowCheckLines] = useState(true);
+91:     const [showHeightRatio, setShowHeightRatio] = useState(true);
+92:     const [showWeiLao, setShowWeiLao] = useState(false);
+93:     const [showBackyard, setShowBackyard] = useState(true);
+94:     const [isConstraintMode, setIsConstraintMode] = useState(false);
+95:     const [isDarkMode, setIsDarkMode] = useState(false);
+96:     const [contextMenu, setContextMenu] = useState({ isOpen: false, x: 0, y: 0 });
+97: 
+98:     useEffect(() => {
+99:         if (isDarkMode) {
+100:             document.documentElement.classList.add('theme-cyberpunk');
+101:             document.documentElement.classList.remove('theme-neumorphism');
+102:         } else {
+103:             document.documentElement.classList.add('theme-neumorphism');
+104:             document.documentElement.classList.remove('theme-cyberpunk');
+105:         }
+106:     }, [isDarkMode]);
+107: 
+108:     // Removed unused toggleConstraints
+109: 
+110:     const updateLot = (id, field, value) => { setLots(prev => prev.map(l => l.id === id ? { ...l, [field]: field === 'area' ? (parseFloat(value) || 0) : value } : l)); };
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

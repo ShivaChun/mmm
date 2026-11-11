@@ -1,0 +1,63 @@
+import React, { useState } from 'react';
+import { ChevronUp, ChevronDown, AlertTriangle } from 'lucide-react';
+import { formatNum, toPing } from '../utils/geometry';
+
+export const Si = React.memo(({ text, x, y, z, rotationZ, baseRotation, viewAngleX, visible, className, lineConnector, isRoadLabel }) => (
+    visible ? (<div className="absolute pointer-events-none" style={{ left: 0, top: 0, transform: `translate3d(${x}px, ${y}px, ${z}px) rotateZ(${isRoadLabel ? -(rotationZ + baseRotation) : -(rotationZ + baseRotation)}deg) rotateX(${-viewAngleX}deg)`, zIndex: 7000 }}><div className="flex items-center" style={{ transform: 'translate(-50%, -50%)' }}>{lineConnector && <div className="w-4 h-[1px] bg-stone-400"></div>}<div className={`whitespace-nowrap px-2 py-0.5 rounded-none shadow-sm text-sm backdrop-blur-sm num-font border-2 border-black bg-white/90 font-black ${className}`}>{text}</div></div></div>) : null
+));
+
+export const CheckLine = React.memo(({ start, end, color, label, rotationZ, baseRotation, viewAngleX, visible, dashed, thick, labelPosRatio = 0.5, isDarkMode }) => {
+    const dx = end.x - start.x; const dy = end.y - start.y; const dz = end.z - start.z; const length = Math.sqrt(dx * dx + dy * dy + dz * dz); const lx = start.x + dx * labelPosRatio; const ly = start.y + dy * labelPosRatio; const lz = start.z + dz * labelPosRatio; const angleZ = Math.atan2(dy, dx) * (180 / Math.PI); const angleY = -Math.atan2(dz, Math.sqrt(dx * dx + dy * dy)) * (180 / Math.PI); const isSteep = viewAngleX > 75; const thickness = thick ? (isSteep ? "6px" : "3px") : (isSteep ? "4px" : "2px");
+    return ( <> <div className="absolute origin-left" style={{ left: 0, top: 0, width: `${length}px`, height: thickness, backgroundColor: dashed ? 'transparent' : color, borderTop: dashed ? `2px dashed ${color}` : 'none', transform: `translate3d(${start.x}px, ${start.y}px, ${start.z}px) rotateZ(${angleZ}deg) rotateY(${angleY}deg)`, opacity: visible ? (isSteep ? 1 : 0.9) : 0, pointerEvents: 'none', boxShadow: isSteep ? `0 0 4px ${color}` : 'none', zIndex: 60 }}></div> {isSteep && (<div className="absolute origin-left" style={{ left: 0, top: 0, width: `${length}px`, height: thickness, backgroundColor: color, transform: `translate3d(${start.x}px, ${start.y}px, ${start.z}px) rotateZ(${angleZ}deg) rotateY(${angleY}deg) rotateX(90deg)`, opacity: visible ? 1 : 0, pointerEvents: 'none', zIndex: 60 }}></div>)} {visible && label && (<Si text={label} x={lx} y={ly} z={lz + 10} rotationZ={rotationZ} baseRotation={baseRotation} viewAngleX={viewAngleX} visible={visible} className="text-[10px] px-2 py-0.5 rounded-none shadow-lg font-black border-2 border-black theme-panel-glass" />)} </> );
+});
+
+export const CollapsibleSection = ({ title, icon, children, defaultOpen = true, className = "" }) => {
+    const [isOpen, setIsOpen] = useState(defaultOpen);
+    return ( 
+        <div className={`theme-panel rounded-none border-4 border-black shadow-[8px_8px_0_#111111] overflow-hidden ${className}`}>
+            <div className="flex items-center justify-between p-6 cursor-pointer hover:bg-[var(--text-accent)] hover:text-white transition-colors border-b-4 border-black group" onClick={() => setIsOpen(!isOpen)}>
+                <h3 className="text-xl font-black theme-text-title flex items-center gap-3">{icon} {title}</h3>
+                <div className="group-hover:scale-125 transition-transform">{isOpen ? <ChevronUp size={24} strokeWidth={3} /> : <ChevronDown size={24} strokeWidth={3} />}</div>
+            </div>
+            <div className={`transition-all duration-300 ease-in-out overflow-hidden ${isOpen ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+                <div className="p-6 bg-white">{children}</div>
+            </div>
+        </div> 
+    );
+};
+
+export const InputRow = ({ id, label, value, calculatedValue, formula, note, isEditMode, onOverride, highlight = false, subTotal = false, bold = false, paramKey, paramValue, onParamChange }) => {
+    const isConflict = isEditMode && calculatedValue !== undefined && Math.abs(value - calculatedValue) > 0.01;
+    const displayValue = formatNum(value);
+    const displayPing = formatNum(toPing(value));
+    return ( 
+        <tr className={`hover:bg-stone-50 transition-colors ${subTotal ? 'bg-stone-100 italic theme-text-muted' : ''}`}>
+            <td className={`p-6 pl-10 border-l-8 ${highlight ? 'border-[var(--text-accent)] font-black text-[var(--text-accent)] uppercase' : 'border-black font-bold'}`}>{label}</td>
+            <td className={`p-6 text-right ${highlight ? 'font-black text-[var(--text-accent)] text-2xl' : ''} ${bold ? 'font-black' : ''}`}>
+                {isEditMode ? (
+                    <div className="flex items-center justify-end gap-3 relative">
+                        {isConflict && <div className="absolute right-full mr-3 text-red-600 animate-pulse border-2 border-red-600 p-1" title="警告：數據衝突"><AlertTriangle size={20} strokeWidth={3} /></div>}
+                        <input type="number" value={value} onChange={(e) => onOverride(id, e.target.value)} className={`w-32 p-2 text-right border-4 rounded-none outline-none focus:border-[var(--text-accent)] focus:bg-white ${isConflict ? 'border-red-500 bg-red-50' : 'border-black theme-bg theme-text'} font-black text-lg num-font`} />
+                    </div>
+                ) : (<span className="num-font font-black">{displayValue}</span>)}
+            </td>
+            <td className={`p-6 text-right theme-text-muted ${highlight ? 'font-black text-[var(--text-accent)] text-xl' : ''} ${bold ? 'font-black' : ''} num-font`}>{displayPing}</td>
+            {isEditMode && (
+                <>
+                    <td className="p-6 font-mono text-xs font-black bg-stone-50 border-l-4 border-black">
+                        {paramKey ? (
+                            <div className="flex items-center gap-2"><span className="uppercase text-[10px]">{paramKey === 'exemptRate' ? '免計率' : paramKey === 'stairRate' ? '梯廳率' : '陽台率'}:</span><input type="number" value={paramValue} onChange={(e) => onParamChange(paramKey, e.target.value)} className="w-20 p-1 border-2 border-black rounded-none text-center font-black bg-white num-font" /><span>%</span></div>
+                        ) : formula}
+                    </td>
+                    <td className="p-6 text-sm font-bold text-stone-500 bg-stone-50">{note}</td>
+                </>
+            )}
+        </tr> 
+    );
+};
+
+export const SectionHeader = ({ title }) => ( 
+    <tr className="bg-black text-white">
+        <td colSpan={10} className="p-4 pl-10 font-black text-sm uppercase tracking-widest leading-none">{title}</td>
+    </tr> 
+);

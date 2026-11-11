@@ -1,0 +1,2937 @@
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { DraggablePanel } from './DraggablePanel';
+import { Box, LayoutTemplate, Sun, Moon, Maximize2, PanelRightOpen, CheckCircle2, AlertTriangle, GripHorizontal, ChevronUp, ChevronDown, Map as MapIcon, Shovel, Layers, Lock, Unlock, Hexagon, Compass, Move, Square, Building2, Car, Bike, X, Eye, ToggleRight, ToggleLeft, CheckSquare } from 'lucide-react';
+import { useFloorStore } from '../store/floorStore';
+import { useSiteAnalysis } from '../hooks/useSiteAnalysis';
+import { generateSvgPath, calculatePolygonArea, getPolygonCentroid, getPolygonBounds, scalePolygon, offsetPolygon, offsetPolygonByArray, getSegmentNormal, getLineIntersection, discretizePolygon, pointInPolygon, allInsidePolygon, polygonSignedArea, clipPolygonByPolygon, fitPolygonWithin, distToSegment, normalizeWithCurves, splitPolygon, splitPolygonByCount, getSplitUnits } from '../utils/polygon';
+import { toPing, formatNum, toSqm } from '../utils/geometry';
+import { createSeededRandom } from '../utils/random';
+import PlanAnalysis2D from './PlanAnalysis2D';
+import { CheckLine, Si } from './Si';
+import { FloorInfoCard } from './FloorInfoCard';
+import { ArtisticCompass } from './ArtisticCompass';
+import { BuildingLayer, SummaryRow } from './SitePolygonEditor';
+const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectInputs, inputs: inputsProp, res, siteResults, aggregateResults, onUpdateSiteSetting, onUpdateRoads, onUpdateInputs, showCheckLines, setShowCheckLines, showHeightRatio, setShowHeightRatio, showWeiLao, setShowWeiLao, showBackyard, setShowBackyard, isConstraintMode, setIsConstraintMode, onUnusedAreaChange, placementMode, placementOffset, setPlacementOffset, onConfirmPlacement, setActiveSiteIndex , showSummaryPanel, setShowSummaryPanel}) => {
+    const activeSite = useMemo(() => (sites || []).find(s => s.id === activeSiteId) || (sites || [])[0] || {}, [sites, activeSiteId]);
+    const inputs = inputsProp || activeSite.inputs || {};
+    const basePoints = activeSite.basePoints || activeSite.baseGeometry?.points;
+    const baseCurves = activeSite.baseCurves || activeSite.baseGeometry?.curves;
+
+    // 安全的 Prop 防護：確保 onUpdateSiteSetting 存在時才呼叫，避免灰屏 (Defensive Prop Protection)
+    const setBasePoints = (pts) => {
+        if (typeof onUpdateSiteSetting === 'function') {
+            onUpdateSiteSetting(activeSiteId, 'basePoints', pts);
+        } else {
+            console.warn('onUpdateSiteSetting is not a function');
+        }
+    };
+    const setBaseCurves = (curves) => {
+        if (typeof onUpdateSiteSetting === 'function') {
+            onUpdateSiteSetting(activeSiteId, 'baseCurves', curves);
+        } else {
+            console.warn('onUpdateSiteSetting is not a function');
+        }
+    };
+    const floorSettings = activeSite.floorSettings || {};
+    const setFloorSettings = (settings) => {
+        if (typeof onUpdateSiteSetting === 'function') {
+            onUpdateSiteSetting(activeSiteId, 'floorSettings', typeof settings === 'function' ? settings(floorSettings) : settings);
+        } else {
+            console.warn('onUpdateSiteSetting is not a function');
+        }
+    };
+    const adjacentLandGroups = activeSite.adjacentLandGroups || [{ id: 1, edges: [] }];
+    const setAdjacentLandGroups = (groups) => {
+        if (typeof onUpdateSiteSetting === 'function') {
+            onUpdateSiteSetting(activeSiteId, 'adjacentLandGroups', typeof groups === 'function' ? groups(adjacentLandGroups) : groups);
+        } else {
+            console.warn('onUpdateSiteSetting is not a function');
+        }
+    };
+
+    // 新增：用於 3D 模擬區的多基地懸浮與精準放置預覽 State
+    const [hoveredSiteId, setHoveredSiteId] = useState(null);
+    const [placementPreview, setPlacementPreview] = useState(null);
+
+    // 3D 世界坐標投影至 2D 螢幕坐標演算法 (Screen-Space Projection Algorithm)
+    const projectWorldToScreen = (wx, wy, wz) => {
+        const centroid = projectBounds.center;
+        
+        // 1. 本地幾何尺度縮放 (相對於包圍盒中心)
+        let x = (wx - centroid.x) * scale;
+        let y = (wy - centroid.y) * scale;
+        let z = wz * scale;
+
+        // 2. Z 軸旋轉 (rotationZ)
+        const radZ = (rotationZ * Math.PI) / 180;
+        const cosZ = Math.cos(radZ);
+        const sinZ = Math.sin(radZ);
+        let rx = x * cosZ - y * sinZ;
+        let ry = x * sinZ + y * cosZ;
+
+        // 3. X 軸旋轉 (viewAngleX)
+        const radX = (viewAngleX * Math.PI) / 180;
+        const cosX = Math.cos(radX);
+        const sinX = Math.sin(radX);
+        let ry2 = ry * cosX - z * sinX;
+
+        // 4. 加上 zoom 縮放 (只縮放旋轉後的座標，不縮放最外層平移)
+        let sx = rx * zoom;
+        let sy = ry2 * zoom;
+
+        // 5. 加上最外層 panOffset 平移與 focusOffset 焦點偏移
+        let finalX = sx + panOffset.x + focusOffset.x;
+        let finalY = sy + panOffset.y + focusOffset.y;
+
+        // 6. 對齊到畫布中心點
+        return {
+            x: w / 2 + finalX,
+            y: d / 2 + finalY
+        };
+    };
+
+    // WCS 世界坐標轉換 Helper (將米為單位的局部點轉換為相對於包圍盒中心點的世界坐標點，米為單位)
+    const toWorldPts = (localPts, layout) => {
+        if (!localPts) return [];
+        const cosS = Math.cos(layout.rotation || 0);
+        const sinS = Math.sin(layout.rotation || 0);
+        return localPts.map(p => ({
+            x: layout.x + (p.x * cosS - p.y * sinS),
+            y: layout.y + (p.x * sinS + p.y * cosS)
+        }));
+    };
+
+    const [animate, setAnimate] = useState(false);
+    // Internal constraint mode state removed (lifted to parent) 
+    const [viewMode, setViewMode] = useState('3d');
+    const [selectedFloor, setSelectedFloor] = useState(null);
+    const [focusOffset, setFocusOffset] = useState({ x: 0, y: 0, z: 0 });
+    const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+    const [showFallingCurve, setShowFallingCurve] = useState(false);
+    const [randomSlabEnabled, setRandomSlabEnabled] = useState(false);
+    const [randomSlabSeed, setRandomSlabSeed] = useState(0);
+    const [unusedPromptKey, setUnusedPromptKey] = useState(null);
+    const [showUnusedPrompt, setShowUnusedPrompt] = useState(false);
+    const [randomSlabShapeMode, setRandomSlabShapeMode] = useState('all');
+    // Task: Unit Settings State
+    const [unitSettings, setUnitSettings] = useState({ enabled: false, axis: 'x', ratio: 0.5, gap: 0, mode: 'ratio', count: 2, areaPerUnit: 20 });
+
+    const floorsBelow = Math.max(0, parseInt(inputs.floorsBelow) || 0);
+    const [basementState, setBasementState] = useState({});
+    const [parkingOn1F, setParkingOn1F] = useState(true);
+    const volumeLimit = res.totalCFA;
+    const carsPerBasement = (res.basementAreaPerFloor || 0) / (inputs.avgCarArea || 35);
+    const recommendedBasementCount = carsPerBasement > 0 ? Math.ceil(res.statutoryParking / carsPerBasement) : 0;
+
+    const [excavationPoints, setExcavationPoints] = useState(null);
+    const [excavationCurves, setExcavationCurves] = useState(null);
+    const [manualFloorsOverride, setManualFloorsOverride] = useState(null);
+
+    const [frontageIndices, setFrontageIndices] = useState(new Set());
+    const [edgeTypes, setEdgeTypes] = useState({});
+    const [adjacentLandEnabled, setAdjacentLandEnabled] = useState(false);
+
+    const [view2D, setView2D] = useState({ x: 0, y: 0, k: 1 });
+    const inputFloorsAbove = parseFloat(inputs.floorsAbove || 0);
+    const targetFloorsAbove = manualFloorsOverride !== null ? manualFloorsOverride : (inputFloorsAbove > 0 ? inputFloorsAbove : res.floorsAbove);
+    const floorHeight1F = parseFloat(inputs.floorHeight1F) || 4.2;
+    const floorHeightOther = parseFloat(inputs.floorHeightOther) || 3.6;
+
+    const minRandomAreaM2 = toSqm(15);
+
+    const basements = useMemo(() => Array.from({ length: floorsBelow }).map((_, i) => ({ id: `B${i + 1}`, area: res.basementAreaPerFloor, active: true, recommended: (i + 1) <= recommendedBasementCount })), [floorsBelow, res.basementAreaPerFloor, recommendedBasementCount]);
+    const activeBasementArea = basements.filter(b => b.active).reduce((acc, b) => acc + b.area, 0);
+    const toggleBasement = (id) => { }; // Removed toggle
+    const toggleParkingLocation = () => setParkingOn1F(prev => !prev);
+
+    useEffect(() => {
+        if (selectedFloor && selectedFloor.id.startsWith('B')) {
+            const bNum = parseInt(selectedFloor.id.substring(1));
+            if (bNum > floorsBelow) setSelectedFloor(null);
+        }
+    }, [floorsBelow]);
+
+    useEffect(() => {
+        if (basePoints) {
+            const scaleRate = Math.sqrt(inputs.excavationRatio / 100);
+            const { points: newPts, curves: newCurves } = scalePolygon(basePoints, baseCurves, scaleRate);
+            setExcavationPoints(newPts);
+            setExcavationCurves(newCurves);
+        }
+    }, [basePoints, baseCurves, inputs.excavationRatio]);
+
+    useEffect(() => {
+        const bw = parseFloat(inputs.baseWidthM);
+        const bd = parseFloat(inputs.baseDepthM);
+        if (bw > 0 && bd > 0) {
+            const newScale3d = Math.min(600 / bw, 600 / bd);
+            const currentScale3d = parseFloat(inputs.scale3d);
+            if (isNaN(currentScale3d) || Math.abs(currentScale3d - newScale3d) > 0.001) {
+                onUpdateInputs('scale3d', parseFloat(newScale3d.toFixed(4)));
+            }
+        }
+    }, [inputs.baseWidthM, inputs.baseDepthM]);
+
+    const toggleConstraints = () => { setIsConstraintMode(!isConstraintMode); if (!isConstraintMode) setShowCheckLines(true); };
+    const [rotationZ, setRotationZ] = useState(-45);
+    const [viewAngleX, setViewAngleX] = useState(58);
+    const [isSettingNorth, setIsSettingNorth] = useState(false);
+    const compassRef = useRef(null);
+    const [zoom, setZoom] = useState(1);
+    const [isDragging, setIsDragging] = useState(false);
+    const lastMousePos = useRef({ x: 0, y: 0 });
+    const lastPinchDist = useRef(null);
+    const lastTouchCenter = useRef(null);
+    const dragModeRef = useRef(null);
+    const viewportRef = useRef(null);
+    const [isMobile, setIsMobile] = useState(false);
+    const isSummaryOpen = showSummaryPanel !== undefined ? showSummaryPanel : true;
+    const setIsSummaryOpen = setShowSummaryPanel || (() => {});
+    const [isProjectSummaryVisible, setIsProjectSummaryVisible] = useState(true);
+    const isLandscapeMode = isMobile && !isSummaryOpen;
+    const rafRef = useRef(null);
+
+    // Helper: 取得 site 的 basePoints（相容兩種資料結構）
+    const getSiteBasePoints = (site) => site.basePoints || site.baseGeometry?.points || null;
+    const getSiteBaseCurves = (site) => site.baseCurves || site.baseGeometry?.curves || null;
+    const getSiteRoads = (site) => site.roads || site.inputs?.roads || [];
+
+    // Layout Engine: Calculate world positions for all sites
+    const siteLayouts = useMemo(() => {
+        const computed = new Map();
+        const processed = new Set();
+        const safeSites = sites || [];
+        const processSite = (siteId) => {
+            if (computed.has(siteId)) return computed.get(siteId);
+            if (processed.has(siteId)) return { x: 0, y: 0, rotation: 0 }; // Avoid circular
+            processed.add(siteId);
+            
+            const site = safeSites.find(s => s.id === siteId);
+            if (!site) return { x: 0, y: 0, rotation: 0 };
+            
+            // 相容：site 可能沒有 layout 屬性（App 用 position 代替）
+            const siteLayout = site.layout || {};
+            if (!siteLayout.type || siteLayout.type === 'origin' || !siteLayout.targetId) {
+                // 使用 position fallback
+                const pos = site.position || { x: 0, y: 0 };
+                const res = { x: pos.x || 0, y: pos.y || 0, rotation: 0 };
+                computed.set(siteId, res);
+                return res;
+            }
+            
+            const targetLayout = processSite(siteLayout.targetId);
+            const targetSite = safeSites.find(s => s.id === siteLayout.targetId);
+            const targetBasePoints = targetSite ? getSiteBasePoints(targetSite) : null;
+            if (!targetSite || !targetBasePoints || targetBasePoints.length < 2) {
+                const res = { x: 0, y: 0, rotation: 0 };
+                computed.set(siteId, res);
+                return res;
+            }
+
+            const tPts = targetBasePoints;
+            const tIdx = siteLayout.targetEdge || 0;
+            const tp1 = tPts[tIdx % tPts.length];
+            const tp2 = tPts[(tIdx + 1) % tPts.length];
+            
+            const tMid = { x: (tp1.x + tp2.x) / 2, y: (tp1.y + tp2.y) / 2 };
+            const tNormal = getSegmentNormal(tp1, tp2);
+            
+            const cosTR = Math.cos(targetLayout.rotation);
+            const sinTR = Math.sin(targetLayout.rotation);
+            const gap = siteLayout.gap || 0;
+            
+            const contactPointLocal = {
+                x: tMid.x + tNormal.x * gap,
+                y: tMid.y + tNormal.y * gap
+            };
+            
+            const worldContactX = targetLayout.x + (contactPointLocal.x * cosTR - contactPointLocal.y * sinTR);
+            const worldContactY = targetLayout.y + (contactPointLocal.x * sinTR + contactPointLocal.y * cosTR);
+            
+            const selfPts = getSiteBasePoints(site) || [{x:-10,y:0}, {x:10,y:0}, {x:10,y:20}, {x:-10,y:20}];
+            const sp1 = selfPts[0];
+            const sp2 = selfPts[1];
+            const sMid = { x: (sp1.x + sp2.x) / 2, y: (sp1.y + sp2.y) / 2 };
+            const sNormal = getSegmentNormal(sp1, sp2);
+            
+            const tNormalWorldAngle = Math.atan2(tNormal.y, tNormal.x) + targetLayout.rotation;
+            const desiredSelfNormalWorldAngle = tNormalWorldAngle + Math.PI;
+            const sNormalLocalAngle = Math.atan2(sNormal.y, sNormal.x);
+            
+            const selfRotation = desiredSelfNormalWorldAngle - sNormalLocalAngle;
+            
+            const cosSR = Math.cos(selfRotation);
+            const sinSR = Math.sin(selfRotation);
+            const worldSelfX = worldContactX - (sMid.x * cosSR - sMid.y * sinSR);
+            const worldSelfY = worldContactY - (sMid.x * sinSR + sMid.y * cosSR);
+
+            const res = { x: worldSelfX, y: worldSelfY, rotation: selfRotation };
+            computed.set(siteId, res);
+            return res;
+        };
+        
+        safeSites.forEach(s => processSite(s.id));
+        return computed;
+    }, [sites]);
+
+    const canvasSize = isMobile ? (isLandscapeMode ? 320 : 200) : 280;
+    
+    const projectBounds = useMemo(() => {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const safeSites = sites || [];
+        safeSites.forEach(site => {
+            const layout = siteLayouts.get(site.id) || { x: 0, y: 0, rotation: 0 };
+            const pts = getSiteBasePoints(site);
+            const curves = getSiteBaseCurves(site);
+            const normalized = pts ? normalizeWithCurves(pts, curves) : { points: [{x:-10,y:-10}, {x:10,y:-10}, {x:10,y:10}, {x:-10,y:10}], curves: null, centroid: {x:0, y:0} };
+            if (normalized && normalized.points) {
+                normalized.points.forEach(p => {
+                    const cos = Math.cos(layout.rotation);
+                    const sin = Math.sin(layout.rotation);
+                    const wx = layout.x + (p.x * cos - p.y * sin);
+                    const wy = layout.y + (p.x * sin + p.y * cos);
+                    minX = Math.min(minX, wx);
+                    minY = Math.min(minY, wy);
+                    maxX = Math.max(maxX, wx);
+                    maxY = Math.max(maxY, wy);
+                });
+            }
+        });
+        if (minX === Infinity) return { minX: -20, minY: -20, maxX: 20, maxY: 20, center: {x:0, y:0}, width: 40, depth: 40 };
+        return {
+            minX, minY, maxX, maxY,
+            center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
+            width: maxX - minX,
+            depth: maxY - minY
+        };
+    }, [sites, siteLayouts]);
+
+    const globalScale = useMemo(() => {
+        const manual = parseFloat(projectInputs?.scale3d || inputs.scale3d);
+        if (manual > 0) return manual;
+        return canvasSize / Math.max(projectBounds.width, projectBounds.depth, 1);
+    }, [projectBounds, projectInputs, inputs.scale3d, canvasSize]);
+
+    const scale = globalScale;
+    // Unified viewport canvas size for the scene
+    const w = Math.max(600, projectBounds.width * scale + 100);
+    const d = Math.max(600, projectBounds.depth * scale + 100);
+
+    // Process each site's geometry and massing (Unified for multi-site rendering)
+    const processedSites = useMemo(() => {
+        const safeSites = sites || [];
+        return safeSites.map(site => {
+            const siteResultItem = Array.isArray(siteResults) 
+                ? siteResults.find(r => r.siteId === site.id) 
+                : siteResults?.[site.id];
+            const siteResult = siteResultItem?.finalRes || siteResultItem?.results || (activeSiteId === site.id ? res : null);
+            if (!siteResult) return null;
+
+            const siteBasePoints = getSiteBasePoints(site);
+            const siteBaseCurves = getSiteBaseCurves(site);
+            const normalized = siteBasePoints 
+                ? normalizeWithCurves(siteBasePoints, siteBaseCurves)
+                : { points: [{x:-10,y:-10}, {x:10,y:-10}, {x:10,y:10}, {x:-10,y:10}], curves: null, centroid: {x:0,y:0} };
+            
+            const layout = siteLayouts.get(site.id) || { x: 0, y: 0, rotation: 0 };
+            
+            // Edge identification (Copied from effect logic but per site)
+            const primaryIndices = new Set();
+            const secondaryIndices = new Set();
+            const siteRoads = getSiteRoads(site);
+            siteRoads.forEach(r => {
+                const indices = new Set();
+                if (r.edgeIndices) r.edgeIndices.forEach(i => indices.add(i));
+                if (r.edgeIndex !== undefined && r.edgeIndex !== "") indices.add(parseInt(r.edgeIndex));
+                if (r.type === 'primary') indices.forEach(i => primaryIndices.add(i));
+                else indices.forEach(i => secondaryIndices.add(i));
+            });
+            
+            const frontIndices = primaryIndices.size > 0 ? primaryIndices : (secondaryIndices.size > 0 ? secondaryIndices : new Set());
+            const combinedEdgeTypes = {};
+            (siteBasePoints || []).forEach((_, i) => {
+                if (!frontIndices.has(i)) {
+                    if (secondaryIndices.has(i)) combinedEdgeTypes[i] = 'side';
+                }
+            });
+
+            // We wrap buildMassingLayers logic in a helper that can be called per site
+            const massing = buildMassingLayersForSite(site, siteResult, normalized, frontIndices, combinedEdgeTypes);
+            
+            return {
+                site,
+                layout,
+                res: siteResult,
+                normalized,
+                massing,
+                frontIndices,
+                combinedEdgeTypes
+            };
+        }).filter(Boolean);
+    }, [sites, siteResults, res, activeSiteId, siteLayouts, showCheckLines, isConstraintMode, manualFloorsOverride, randomSlabEnabled, randomSlabSeed, showFallingCurve]);
+
+    // Helper to build massing for a specific site
+    // Helper: 為指定 site 建立量體層
+    function buildMassingLayersForSite(site, siteRes, normalizedData, siteEffectiveFrontIndices, siteCombinedEdgeTypes) {
+        const siteInputs = site.inputs || inputs;
+        const inputFloorsAboveVal = parseFloat(siteInputs.floorsAbove || 0);
+        const targetFAbove = (site.id === activeSiteId && manualFloorsOverride !== null) 
+            ? manualFloorsOverride : (inputFloorsAboveVal > 0 ? inputFloorsAboveVal : (siteRes.floorsAbove || 4));
+        return buildMassingLayers(siteRes, site, normalizedData, siteEffectiveFrontIndices, siteCombinedEdgeTypes, targetFAbove);
+    }
+
+    useEffect(() => { const checkMobile = () => setIsMobile(window.innerWidth < 768); checkMobile(); window.addEventListener('resize', checkMobile); return () => window.removeEventListener('resize', checkMobile); }, []);
+    useEffect(() => { if (isMobile) { setIsSummaryOpen(false); setIsProjectSummaryVisible(true); } }, [isMobile]);
+    useEffect(() => { setAnimate(true); const timer = setTimeout(() => setAnimate(false), 1000); return () => clearTimeout(timer); }, [res.floorsAbove]);
+
+    useEffect(() => {
+        const element = viewportRef.current;
+        if (!element) return;
+        const handleNativeWheel = (e) => {
+            if (e.cancelable) e.preventDefault();
+            e.stopPropagation();
+            const sensitivity = 0.002;
+            const delta = -e.deltaY * sensitivity;
+
+            if (viewMode === '2d') {
+                setView2D(v => {
+                    const newK = Math.min(5, Math.max(0.5, v.k + delta * 200)); // Adjusted sensitivity for 2D
+                    return { ...v, k: newK };
+                });
+            } else {
+                setZoom(prev => Math.min(3, Math.max(0.2, prev + delta)));
+            }
+        };
+        element.addEventListener('wheel', handleNativeWheel, { passive: false });
+        return () => element.removeEventListener('wheel', handleNativeWheel);
+    }, [viewMode]);
+
+    const getTouchDistance = (touches) => Math.hypot(touches[0].pageX - touches[1].pageX, touches[0].pageY - touches[1].pageY);
+    const getTouchCenter = (touches) => ({ x: (touches[0].clientX + touches[1].clientX) / 2, y: (touches[0].clientY + touches[1].clientY) / 2 });
+    const handleMouseDown = (e) => {
+        if (viewMode === '2d') return;
+        if (e.button === 1) {
+            e.preventDefault();
+            dragModeRef.current = 'rotate';
+        } else if (e.button === 0) {
+            dragModeRef.current = 'pan';
+        } else {
+            return;
+        }
+        setIsDragging(true);
+        lastMousePos.current = { x: e.clientX, y: e.clientY };
+    };
+    const updateNorthFromEvent = (e) => {
+        if (!compassRef.current) return;
+        const rect = compassRef.current.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const dx = e.clientX - cx;
+        const dy = e.clientY - cy;
+        let angle = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
+        if (angle < 0) angle += 360;
+        onUpdateInputs('northAngle', parseFloat(angle.toFixed(1)));
+    };
+    const handleCompassPointerDown = (e) => {
+        e.stopPropagation();
+        if (e.currentTarget?.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
+        setViewAngleX(90);
+        setIsSettingNorth(true);
+        updateNorthFromEvent(e);
+    };
+    const handleCompassPointerMove = (e) => {
+        if (!isSettingNorth) return;
+        e.stopPropagation();
+        updateNorthFromEvent(e);
+    };
+    const handleCompassPointerUp = (e) => {
+        if (e.currentTarget?.releasePointerCapture) e.currentTarget.releasePointerCapture(e.pointerId);
+        setIsSettingNorth(false);
+    };
+    const handleTouchStart = (e) => {
+        if (viewMode === '2d') {
+            if (e.touches.length === 2) { lastPinchDist.current = getTouchDistance(e.touches); }
+            return;
+        }
+        if (e.touches.length === 2) {
+            lastPinchDist.current = getTouchDistance(e.touches);
+            lastTouchCenter.current = getTouchCenter(e.touches);
+            dragModeRef.current = 'pan';
+            setIsDragging(true);
+        } else if (e.touches.length === 1) {
+            dragModeRef.current = 'rotate';
+            setIsDragging(true);
+            lastMousePos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        }
+    };
+    const handleMouseMove = (e) => {
+        // Placement Mode logic
+        if (placementMode === 'independent' && viewportRef.current) {
+            const rect = viewportRef.current.getBoundingClientRect();
+            // Simple mapping from screen to 3D center at Z=0
+            const rawX = e.clientX - rect.left - rect.width / 2;
+            const rawY = e.clientY - rect.top - rect.height / 2;
+            
+            // Undo transforms (approximation)
+            const rZ = -rotationZ * Math.PI / 180;
+            const sX = rawX / zoom;
+            const rX = viewAngleX * Math.PI / 180;
+            const sY = (rawY / zoom) / Math.cos(rX);
+            
+            // Un-rotate Z
+            let worldX = sX * Math.cos(rZ) - sY * Math.sin(rZ);
+            let worldY = sX * Math.sin(rZ) + sY * Math.cos(rZ);
+            
+            worldX = worldX - panOffset.x;
+            worldY = worldY - panOffset.y;
+            
+            // World coordinate mapping relative to scale
+            let mapX = worldX / globalScale;
+            let mapY = worldY / globalScale;
+            
+            // Auto-snapping & Collision Detection (精準吸附與重疊檢測)
+            const activeSite = sites.find(s => s.id === activeSiteId) || sites[0];
+            const newW = parseFloat(activeSite.inputs?.baseWidthM || activeSite.inputs?.baseWidth) || Math.sqrt(activeSite.inputs?.baseArea || 239);
+            const newD = parseFloat(activeSite.inputs?.baseDepthM) || ((activeSite.inputs?.baseArea || 239) / newW);
+            
+            // 收集所有可以吸附的邊段 (Collect snap segments)
+            const snapSegments = [];
+
+            // 1. 現有基地的邊段
+            for (const s of sites) {
+                if (s.id === activeSiteId && sites.length === 1) continue;
+                
+                const sLayout = siteLayouts.get(s.id) || { x: s.position?.x || 0, y: s.position?.y || 0, rotation: 0 };
+                const geom = getSiteBasePoints(s);
+                let pts = [];
+                if (geom && geom.length > 2) {
+                    const cosS = Math.cos(sLayout.rotation);
+                    const sinS = Math.sin(sLayout.rotation);
+                    pts = geom.map(p => ({
+                        x: sLayout.x + (p.x * cosS - p.y * sinS),
+                        y: sLayout.y + (p.x * sinS + p.y * cosS)
+                    }));
+                } else {
+                    const ew = parseFloat(s.inputs?.baseWidthM || s.inputs?.baseWidth) || Math.sqrt(s.inputs?.baseArea || 239);
+                    const ed = parseFloat(s.inputs?.baseDepthM) || ((s.inputs?.baseArea || 239) / ew);
+                    const localPts = [{x:-ew/2, y:-ed/2}, {x:ew/2, y:-ed/2}, {x:ew/2, y:ed/2}, {x:-ew/2, y:ed/2}];
+                    const cosS = Math.cos(sLayout.rotation);
+                    const sinS = Math.sin(sLayout.rotation);
+                    pts = localPts.map(p => ({
+                        x: sLayout.x + (p.x * cosS - p.y * sinS),
+                        y: sLayout.y + (p.x * sinS + p.y * cosS)
+                    }));
+                }
+                
+                for (let i = 0; i < pts.length; i++) {
+                    snapSegments.push({ p1: pts[i], p2: pts[(i + 1) % pts.length] });
+                }
+            }
+
+            // 2. 主道路的外側邊段
+            let roadWorldPolygon = null;
+            const siteA = sites[0];
+            if (siteA && siteA.inputs?.roads) {
+                const mainRoad = siteA.inputs.roads.find(r => r.type === 'primary') || siteA.inputs.roads[0];
+                if (mainRoad) {
+                    const roadWidth = parseFloat(mainRoad.width) || 6;
+                    const ptsA = getSiteBasePoints(siteA);
+                    const sLayoutA = siteLayouts.get(siteA.id) || { x: siteA.position?.x || 0, y: siteA.position?.y || 0, rotation: 0 };
+                    let p1, p2;
+                    
+                    if (ptsA && ptsA.length > 2) {
+                        const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % ptsA.length;
+                        const cosA = Math.cos(sLayoutA.rotation);
+                        const sinA = Math.sin(sLayoutA.rotation);
+                        const pt1 = ptsA[roadEdgeIdx];
+                        const pt2 = ptsA[(roadEdgeIdx + 1) % ptsA.length];
+                        p1 = { 
+                            x: sLayoutA.x + (pt1.x * cosA - pt1.y * sinA), 
+                            y: sLayoutA.y + (pt1.x * sinA + pt1.y * cosA) 
+                        };
+                        p2 = { 
+                            x: sLayoutA.x + (pt2.x * cosA - pt2.y * sinA), 
+                            y: sLayoutA.y + (pt2.x * sinA + pt2.y * cosA) 
+                        };
+                        
+                        const dx = p2.x - p1.x;
+                        const dy = p2.y - p1.y;
+                        const L = Math.sqrt(dx*dx + dy*dy);
+                        if (L > 0.001) {
+                            const sCentroidLocal = getPolygonCentroid(ptsA);
+                            const sCentroid = {
+                                x: sLayoutA.x + (sCentroidLocal.x * cosA - sCentroidLocal.y * sinA),
+                                y: sLayoutA.y + (sCentroidLocal.x * sinA + sCentroidLocal.y * cosA)
+                            };
+                            
+                            const nx = -dy / L;
+                            const ny = dx / L;
+                            const vcx = (p1.x + p2.x)/2 - sCentroid.x;
+                            const vcy = (p1.y + p2.y)/2 - sCentroid.y;
+                            const dot = nx * vcx + ny * vcy;
+                            const rx = dot >= 0 ? nx : -nx;
+                            const ry = dot >= 0 ? ny : -ny;
+                            
+                            const roadOutP1 = { x: p1.x + rx * roadWidth, y: p1.y + ry * roadWidth };
+                            const roadOutP2 = { x: p2.x + rx * roadWidth, y: p2.y + ry * roadWidth };
+                            roadWorldPolygon = [p1, p2, roadOutP2, roadOutP1];
+                            
+                            snapSegments.push({ p1: roadOutP1, p2: roadOutP2 });
+                        }
+                    } else {
+                        const wA = parseFloat(siteA.inputs.baseWidthM || siteA.inputs.baseWidth) || Math.sqrt(siteA.inputs.baseArea || 239);
+                        const dA = parseFloat(siteA.inputs.baseDepthM) || ((siteA.inputs.baseArea || 239) / wA);
+                        const localA = [
+                            { x: -wA/2, y: -dA/2 }, { x: wA/2, y: -dA/2 },
+                            { x: wA/2, y: dA/2 }, { x: -wA/2, y: dA/2 }
+                        ];
+                        const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % 4;
+                        const cosA = Math.cos(sLayoutA.rotation);
+                        const sinA = Math.sin(sLayoutA.rotation);
+                        const pt1 = localA[roadEdgeIdx];
+                        const pt2 = localA[(roadEdgeIdx + 1) % 4];
+                        p1 = { 
+                            x: sLayoutA.x + (pt1.x * cosA - pt1.y * sinA), 
+                            y: sLayoutA.y + (pt1.x * sinA + pt1.y * cosA) 
+                        };
+                        p2 = { 
+                            x: sLayoutA.x + (pt2.x * cosA - pt2.y * sinA), 
+                            y: sLayoutA.y + (pt2.x * sinA + pt2.y * cosA) 
+                        };
+                        
+                        const dx = p2.x - p1.x;
+                        const dy = p2.y - p1.y;
+                        const L = Math.sqrt(dx*dx + dy*dy);
+                        if (L > 0.001) {
+                            const rx = -dy / L;
+                            const ry = dx / L;
+                            const dot = rx * pt1.x + ry * pt1.y;
+                            const srx = dot >= 0 ? rx : -rx;
+                            const sry = dot >= 0 ? ry : -ry;
+                            
+                            const roadOutP1 = { x: p1.x + srx * roadWidth, y: p1.y + sry * roadWidth };
+                            const roadOutP2 = { x: p2.x + srx * roadWidth, y: p2.y + sry * roadWidth };
+                            roadWorldPolygon = [p1, p2, roadOutP2, roadOutP1];
+                            
+                            snapSegments.push({ p1: roadOutP1, p2: roadOutP2 });
+                        }
+                    }
+                }
+            }
+
+            let snapped = false;
+            let snapX = mapX;
+            let snapY = mapY;
+            let snapRotation = 0;
+            const snapThreshold = 3.5 / globalScale; // ~3.5px in world space
+
+            for (const seg of snapSegments) {
+                const dist = distToSegment({ x: mapX, y: mapY }, seg.p1, seg.p2);
+                if (dist < snapThreshold) {
+                    snapped = true;
+                    // Snap exactly onto the segment (projection)
+                    const l2 = (seg.p1.x - seg.p2.x)**2 + (seg.p1.y - seg.p2.y)**2;
+                    let t = 0.5;
+                    if (l2 > 0.0001) {
+                        t = ((mapX - seg.p1.x)*(seg.p2.x - seg.p1.x) + (mapY - seg.p1.y)*(seg.p2.y - seg.p1.y)) / l2;
+                        t = Math.max(0, Math.min(1, t));
+                    }
+                    snapX = seg.p1.x + t * (seg.p2.x - seg.p1.x);
+                    snapY = seg.p1.y + t * (seg.p2.y - seg.p1.y);
+                    
+                    // 邊對邊精準推出：計算指向滑鼠側的法向量，將中心點沿該方向推出半個深度 newD / 2，實現完美貼合且無交疊
+                    const dx = seg.p2.x - seg.p1.x;
+                    const dy = seg.p2.y - seg.p1.y;
+                    const L = Math.sqrt(dx*dx + dy*dy);
+                    let nx = -dy / L;
+                    let ny = dx / L;
+                    if (nx * (mapX - snapX) + ny * (mapY - snapY) < 0) {
+                        nx = -nx;
+                        ny = -ny;
+                    }
+                    
+                    snapX = snapX + nx * (newD / 2);
+                    snapY = snapY + ny * (newD / 2);
+                    
+                    // 計算使新基地底邊完美對齊的旋轉角度
+                    snapRotation = Math.atan2(ny, nx) - Math.PI / 2;
+                    break;
+                }
+            }
+
+            const checkOverlapLocal = (polyA, polyB) => {
+                const segmentsIntersect = (p1, p2, p3, p4) => {
+                    const ccw = (A, B, C) => (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+                    return ccw(p1, p3, p4) !== ccw(p2, p3, p4) && ccw(p1, p2, p3) !== ccw(p1, p2, p4);
+                };
+                for (let i = 0; i < polyA.length; i++) {
+                    const a1 = polyA[i];
+                    const a2 = polyA[(i + 1) % polyA.length];
+                    for (let j = 0; j < polyB.length; j++) {
+                        const b1 = polyB[j];
+                        const b2 = polyB[(j + 1) % polyB.length];
+                        if (segmentsIntersect(a1, a2, b1, b2)) return true;
+                    }
+                }
+                const isPointInPolygon = (pt, poly) => {
+                    let inside = false;
+                    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                        const xi = poly[i].x, yi = poly[i].y;
+                        const xj = poly[j].x, yj = poly[j].y;
+                        const intersect = ((yi > pt.y) !== (yj > pt.y))
+                            && (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi);
+                        if (intersect) inside = !inside;
+                    }
+                    return inside;
+                };
+                if (polyA.length > 0 && isPointInPolygon(polyA[0], polyB)) return true;
+                if (polyB.length > 0 && isPointInPolygon(polyB[0], polyA)) return true;
+                return false;
+            };
+
+            const previewLocalPts = [
+                { x: -newW/2, y: -newD/2 },
+                { x: newW/2, y: -newD/2 },
+                { x: newW/2, y: newD/2 },
+                { x: -newW/2, y: newD/2 }
+            ];
+            const cosP = Math.cos(snapRotation);
+            const sinP = Math.sin(snapRotation);
+            const worldPtsPreview = previewLocalPts.map(p => ({
+                x: snapX + (p.x * cosP - p.y * sinP),
+                y: snapY + (p.x * sinP + p.y * cosP)
+            }));
+
+            let isOverlapping = false;
+            for (const s of sites) {
+                if (s.id === activeSiteId && sites.length === 1) continue;
+                
+                const sLayout = siteLayouts.get(s.id) || { x: s.position?.x || 0, y: s.position?.y || 0, rotation: 0 };
+                const sGeom = getSiteBasePoints(s);
+                let sLocalPts = [];
+                if (sGeom && sGeom.length > 2) {
+                    sLocalPts = sGeom;
+                } else {
+                    const ew = parseFloat(s.inputs?.baseWidthM || s.inputs?.baseWidth) || Math.sqrt(s.inputs?.baseArea || 239);
+                    const ed = parseFloat(s.inputs?.baseDepthM) || ((s.inputs?.baseArea || 239) / ew);
+                    sLocalPts = [
+                        { x: -ew/2, y: -ed/2 },
+                        { x: ew/2, y: -ed/2 },
+                        { x: ew/2, y: ed/2 },
+                        { x: -ew/2, y: ed/2 }
+                    ];
+                }
+                const cosS = Math.cos(sLayout.rotation);
+                const sinS = Math.sin(sLayout.rotation);
+                const worldPtsS = sLocalPts.map(p => ({
+                    x: sLayout.x + (p.x * cosS - p.y * sinS),
+                    y: sLayout.y + (p.x * sinS + p.y * cosS)
+                }));
+
+                if (checkOverlapLocal(worldPtsPreview, worldPtsS)) {
+                    isOverlapping = true;
+                    break;
+                }
+            }
+
+            // 納入主要道路重疊檢查
+            if (!isOverlapping && roadWorldPolygon) {
+                if (checkOverlapLocal(worldPtsPreview, roadWorldPolygon)) {
+                    isOverlapping = true;
+                }
+            }
+            
+            setPlacementPreview({ 
+                x: snapX, 
+                y: snapY, 
+                rotation: snapRotation, 
+                isSnapped: snapped, 
+                width: newW, 
+                depth: newD,
+                isOverlapping: isOverlapping
+            });
+            // 同時把 rotation 傳給 offset，以便 App 抓到旋轉角度
+            setPlacementOffset({ x: snapX, y: snapY, rotation: snapRotation });
+        }
+
+        if (!isDragging) return;
+        const deltaX = e.clientX - lastMousePos.current.x;
+        const deltaY = e.clientY - lastMousePos.current.y;
+        let effectiveDeltaX = isLandscapeMode ? deltaY : deltaX;
+        let effectiveDeltaY = isLandscapeMode ? -deltaX : deltaY;
+        if (dragModeRef.current === 'rotate') {
+            setRotationZ(prev => prev + effectiveDeltaX * 0.5);
+            setViewAngleX(prev => Math.min(85, Math.max(10, prev - effectiveDeltaY * 0.5)));
+        } else if (dragModeRef.current === 'pan') {
+            setPanOffset(prev => ({ x: prev.x + effectiveDeltaX, y: prev.y + effectiveDeltaY }));
+        }
+        lastMousePos.current = { x: e.clientX, y: e.clientY };
+    };
+    const handleTouchMove = (e) => {
+        if (e.touches.length === 2 && lastPinchDist.current !== null) {
+            const currentDist = getTouchDistance(e.touches);
+            const currentCenter = getTouchCenter(e.touches);
+            const delta = currentDist - lastPinchDist.current;
+            if (viewMode === '2d') {
+                setView2D(v => ({ ...v, k: Math.min(5, Math.max(0.5, v.k + delta * 0.005)) }));
+            } else if (Math.abs(delta) > 1.5) {
+                setZoom(prev => Math.min(3, Math.max(0.2, prev + delta * 0.005)));
+            }
+            if (lastTouchCenter.current) {
+                const dX = currentCenter.x - lastTouchCenter.current.x;
+                const dY = currentCenter.y - lastTouchCenter.current.y;
+                let effectiveDeltaX = isLandscapeMode ? dY : dX;
+                let effectiveDeltaY = isLandscapeMode ? -dX : dY;
+                setPanOffset(prev => ({ x: prev.x + effectiveDeltaX, y: prev.y + effectiveDeltaY }));
+            }
+            lastPinchDist.current = currentDist;
+            lastTouchCenter.current = currentCenter;
+            return;
+        }
+        if (!isDragging || e.touches.length !== 1) return;
+        if (rafRef.current) return;
+                const clientX = e.touches[0].clientX; const clientY = e.touches[0].clientY;
+                rafRef.current = requestAnimationFrame(() => {
+                    const deltaX = clientX - lastMousePos.current.x; const deltaY = clientY - lastMousePos.current.y; let effectiveDeltaX = isLandscapeMode ? deltaY : deltaX; let effectiveDeltaY = isLandscapeMode ? -deltaX : deltaY; setRotationZ(prev => prev + effectiveDeltaX * 0.5); setViewAngleX(prev => Math.min(85, Math.max(10, prev - effectiveDeltaY * 0.5))); lastMousePos.current = { x: clientX, y: clientY }; rafRef.current = null;
+                });
+            };
+            const handleMouseUp = () => { setIsDragging(false); lastPinchDist.current = null; lastTouchCenter.current = null; dragModeRef.current = null; };
+            const handleZoomIn = () => { if (viewMode === '2d') { setView2D(v => ({ ...v, k: Math.min(5, v.k * 1.2) })); } else { setZoom(prev => Math.min(3, prev + 0.2)); } };
+            const handleZoomOut = () => { if (viewMode === '2d') { setView2D(v => ({ ...v, k: Math.max(0.5, v.k / 1.2) })); } else { setZoom(prev => Math.max(0.2, prev - 0.2)); } };
+            const handleLayerClick = (e, layer) => { e.stopPropagation(); if (selectedFloor && selectedFloor.id === layer.id) return; const settings = floorSettings[layer.id] || {}; setSelectedFloor({ ...layer, rotation: layer.rotation || 0, pivot: settings.pivot || { x: 0, y: 0 }, alignment: settings.alignment || { x: 'left', y: 'back' }, violations: layer.violations || [], points: settings.points || null, curves: settings.curves || null }); const targetZ = layer.z + layer.height * 0.5; setFocusOffset({ x: -layer.shiftX, y: -layer.shiftYPx, z: -targetZ }); setZoom(2.5); };
+            const handleBgClick = () => { if (selectedFloor) { setSelectedFloor(null); } };
+            
+            // 更新樓層設定 (Update floor settings)
+            // 處理來自平面分析區的數據更新 (Handle data updates from 2D analysis)
+            const updateFloorSetting = (floorId, field, value) => {
+                if (isConstraintMode && !(floorId && floorId.startsWith('B'))) return;
+                if (floorId === 'base') {
+                    if (field === 'points') {
+                        // 更新基地點座標 (Update base points)
+                        setBasePoints(value);
+                        if (value) {
+                            // 重置其他樓層設定，因為基地形狀改變可能導致幾何失效
+                            // (Reset other floor settings as base shape change invalidates geometry)
+                            setFloorSettings(prev => { const next = { ...prev }; Object.keys(next).forEach(k => { if (k !== 'base') { delete next[k].points; delete next[k].curves; delete next[k].manualArea; delete next[k].manualDim; delete next[k].width; delete next[k].depth; delete next[k].offset; delete next[k].rotation; delete next[k].pivot; delete next[k].alignment; } }); return next; });
+                            setExcavationPoints(null); setExcavationCurves(null);
+                        }
+                    } else if (field === 'curves') { setBaseCurves(value); } else if (field === 'reset') { setBasePoints(null); setBaseCurves(null); setFrontageIndices(new Set()); setEdgeTypes({}); }
+                    return;
+                }
+                if (floorId === 'excavation') { if (field === 'points') setExcavationPoints(value); if (field === 'reset') { setExcavationPoints(null); setExcavationCurves(null); } return; }
+                if (field === 'reset') { setFloorSettings(prev => { const copy = { ...prev }; delete copy[floorId]; return copy; }); return; }
+                setFloorSettings(prev => { const current = prev[floorId] || {}; let newData = { ...current }; if (field.startsWith('align_')) { const axis = field.split('_')[1]; const alignment = { ...(current.alignment || { x: 'left', y: 'back' }), [axis]: value }; newData.alignment = alignment; } else if (field.startsWith('pivot')) { const axis = field === 'pivotX' ? 'x' : 'y'; const pivot = { ...(current.pivot || { x: 0, y: 0 }), [axis]: value }; newData.pivot = pivot; } else if (field === 'area') { newData.area = value; newData.manualArea = true; } else if (field === 'points') { if (value && value.length >= 3) { let area = calculatePolygonArea(value); newData.area = area; newData.manualArea = true; } newData.points = value; } else if (field === 'curves') { newData.curves = value; } else if (field === 'units') { newData.units = value; newData.manualArea = true; } else if (field === 'offset_delta') { const currentOff = current.offset || { x: 0, y: 0 }; newData.offset = { x: currentOff.x + value.x, y: currentOff.y + value.y }; } else { newData[field] = value; if (field === 'width' || field === 'depth') newData.manualDim = true; } return { ...prev, [floorId]: newData }; });
+            };
+
+            const handleBaseEditEnd = (floorId, points) => {
+                if (floorId === 'base' && points) {
+                    const normalized = normalizeWithCurves(points, baseCurves);
+                    if (normalized.points) {
+                        setBasePoints(normalized.points);
+                        setBaseCurves(normalized.curves);
+                    }
+                    const shift = normalized.centroid || { x: 0, y: 0 };
+                    if (Math.abs(shift.x) > 0.0001 || Math.abs(shift.y) > 0.0001) {
+                        setFloorSettings(prev => {
+                            const next = { ...prev };
+                            let changed = false;
+                            Object.keys(next).forEach(k => {
+                                if (k === 'base') return;
+                                const cur = next[k];
+                                if (!cur) return;
+                                let updated = null;
+                                if (cur.points && cur.points.length > 0) {
+                                    const shiftedPoints = cur.points.map(p => ({ x: p.x - shift.x, y: p.y - shift.y }));
+                                    updated = { ...(updated || cur), points: shiftedPoints };
+                                }
+                                if (cur.curves) {
+                                    const shiftedCurves = {};
+                                    Object.keys(cur.curves).forEach(idx => {
+                                        const cp = cur.curves[idx];
+                                        shiftedCurves[idx] = { x: cp.x - shift.x, y: cp.y - shift.y };
+                                    });
+                                    updated = { ...(updated || cur), curves: shiftedCurves };
+                                }
+                                if (updated) {
+                                    next[k] = updated;
+                                    changed = true;
+                                }
+                            });
+                            return changed ? next : prev;
+                        });
+                        setExcavationPoints(prev => {
+                            if (!prev || prev.length === 0) return prev;
+                            return prev.map(p => ({ x: p.x - shift.x, y: p.y - shift.y }));
+                        });
+                        setExcavationCurves(prev => {
+                            if (!prev) return prev;
+                            const next = {};
+                            Object.keys(prev).forEach(k => {
+                                const cp = prev[k];
+                                next[k] = { x: cp.x - shift.x, y: cp.y - shift.y };
+                            });
+                            return next;
+                        });
+                    }
+                    const area = calculatePolygonArea(points);
+                    const currentArea = parseFloat(inputs.baseArea || 0);
+                    if (Math.abs(area - currentArea) > 0.01) {
+                        onUpdateBaseDim('baseArea', parseFloat(area.toFixed(2)));
+                    }
+                    const xs = points.map(p => p.x); const w = Math.max(...xs) - Math.min(...xs);
+                    const currentW = parseFloat(inputs.baseWidth || 0);
+                    if (Math.abs(w - currentW) > 0.01) {
+                        onUpdateInputs('baseWidth', parseFloat(w.toFixed(2)));
+                    }
+                    const bounds = getPolygonBounds(points);
+                    if (bounds) {
+                        const baseWidthM = bounds.maxX - bounds.minX;
+                        const baseDepthM = bounds.maxY - bounds.minY;
+                        onUpdateInputs('baseWidthM', parseFloat(baseWidthM.toFixed(2)));
+                        onUpdateInputs('baseDepthM', parseFloat(baseDepthM.toFixed(2)));
+                    }
+                }
+            };
+
+    const resetFloor = (floorId) => { setFloorSettings(prev => { const copy = { ...prev }; delete copy[floorId]; return copy; }); };
+
+    const updateEdgeTypes = (index, type) => { setEdgeTypes(prev => { if (index === null && typeof type === 'object') { return type; } const next = { ...prev }; if (next[index] === type) { delete next[index]; } else { next[index] = type; } return next; }); };
+
+
+    // Shorthands for active site (backward compatibility for some components)
+    const baseWidthM = parseFloat(inputs.baseWidthM || inputs.baseWidth || 20);
+    const baseDepthM = parseFloat(inputs.baseDepthM || inputs.baseDepth || 20);
+    const frontM = parseFloat(inputs.frontYardDepth) || 0;
+    const backM = parseFloat(inputs.backYardDepth) || 0;
+    const sideM = parseFloat(inputs.sideYardDepth) || 0;
+    const sideDir = inputs.sideYardDirection || 'right';
+    const arcadeM = (inputs.frontYardDepth == 0 && inputs.arcadeDepth) ? parseFloat(inputs.arcadeDepth) : 0;
+
+
+    useEffect(() => {
+        const roadList = inputs.roads || [];
+        const primaryIndices = new Set();
+        const secondaryIndices = new Set();
+
+        roadList.forEach(r => {
+            const indices = new Set();
+            if (r.edgeIndices) r.edgeIndices.forEach(i => indices.add(i));
+            if (r.edgeIndex !== undefined && r.edgeIndex !== "") indices.add(parseInt(r.edgeIndex));
+
+            if (r.type === 'primary') {
+                indices.forEach(i => primaryIndices.add(i));
+            } else {
+                indices.forEach(i => secondaryIndices.add(i));
+            }
+        });
+
+        const workingPoints = (basePoints && basePoints.length > 2) ? basePoints : [{ x: -baseWidthM / 2, y: -baseDepthM / 2 }, { x: baseWidthM / 2, y: -baseDepthM / 2 }, { x: baseWidthM / 2, y: baseDepthM / 2 }, { x: -baseWidthM / 2, y: baseDepthM / 2 }];
+        const workingCurves = (basePoints && basePoints.length > 2) ? baseCurves : null;
+        const edgeCount = workingPoints.length;
+
+        const nextFront = new Set();
+        if (primaryIndices.size > 0) {
+            primaryIndices.forEach(i => nextFront.add(i));
+        } else if (secondaryIndices.size > 0) {
+            secondaryIndices.forEach(i => nextFront.add(i));
+        } else if (frontageIndices && frontageIndices.size > 0) {
+            frontageIndices.forEach(i => nextFront.add(i));
+        }
+
+        const filteredFront = new Set();
+        nextFront.forEach(i => {
+            if (Number.isInteger(i) && i >= 0 && i < edgeCount) filteredFront.add(i);
+        });
+
+        const nextEdgeTypes = {};
+        Object.keys(edgeTypes || {}).forEach(k => {
+            const idx = parseInt(k);
+            if (!Number.isNaN(idx) && idx >= 0 && idx < edgeCount && !filteredFront.has(idx)) {
+                nextEdgeTypes[idx] = edgeTypes[k];
+            }
+        });
+
+        secondaryIndices.forEach(idx => {
+            if (idx >= 0 && idx < edgeCount && !filteredFront.has(idx) && !nextEdgeTypes[idx]) {
+                nextEdgeTypes[idx] = 'side';
+            }
+        });
+
+        const hasBack = Object.values(nextEdgeTypes).includes('back');
+        if (!hasBack && filteredFront.size > 0) {
+            const normalized = normalizeWithCurves(workingPoints, workingCurves);
+            if (normalized.points && normalized.points.length > 2) {
+                const discretized = discretizePolygon(normalized.points, normalized.curves, 20);
+                const pts = discretized.points;
+                const edgeMap = discretized.edgeMap;
+                const centroid = getPolygonCentroid(pts);
+                let frontNormal = { x: 0, y: 0 };
+                let count = 0;
+
+                pts.forEach((p, i) => {
+                    const orig = edgeMap[i];
+                    if (filteredFront.has(orig)) {
+                        const p2 = pts[(i + 1) % pts.length];
+                        const n = getSegmentNormal(p, p2, centroid);
+                        frontNormal.x += n.x;
+                        frontNormal.y += n.y;
+                        count++;
+                    }
+                });
+
+                if (count > 0) {
+                    const len = Math.sqrt(frontNormal.x * frontNormal.x + frontNormal.y * frontNormal.y);
+                    if (len > 0) {
+                        frontNormal.x /= len;
+                        frontNormal.y /= len;
+
+                        pts.forEach((p, i) => {
+                            const orig = edgeMap[i];
+                            if (filteredFront.has(orig)) return;
+                            const p2 = pts[(i + 1) % pts.length];
+                            const n = getSegmentNormal(p, p2, centroid);
+                            const dot = n.x * frontNormal.x + n.y * frontNormal.y;
+                            if (dot < -0.5 && !nextEdgeTypes[orig]) {
+                                nextEdgeTypes[orig] = 'back';
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        const sameFront = (a, b) => {
+            if (!a || !b || a.size !== b.size) return false;
+            for (const v of a) if (!b.has(v)) return false;
+            return true;
+        };
+        const sameEdgeTypes = (a, b) => {
+            const aKeys = Object.keys(a || {});
+            const bKeys = Object.keys(b || {});
+            if (aKeys.length !== bKeys.length) return false;
+            for (const k of aKeys) if (a[k] !== b[k]) return false;
+            return true;
+        };
+
+        if (!sameFront(frontageIndices || new Set(), filteredFront)) setFrontageIndices(filteredFront);
+        if (!sameEdgeTypes(edgeTypes || {}, nextEdgeTypes)) setEdgeTypes(nextEdgeTypes);
+    }, [basePoints, baseCurves, baseWidthM, baseDepthM, inputs.roads, frontageIndices, edgeTypes]);
+
+    // 標準化點座標 (Normalize points)
+    const normalizePoints = (points) => {
+        if (!points) return null;
+        const centroid = getPolygonCentroid(points);
+        return points.map(p => ({ x: p.x - centroid.x, y: p.y - centroid.y }));
+    };
+
+    // 核心修正: 預先計算標準化的基地數據 (Core Fix: Pre-calculate normalized base data)
+    // 確保所有樓層和退縮計算都基於同一個中心點 (0,0)，避免基地形狀改變時發生位移
+    const normalizedData = useMemo(() => {
+        if (!basePoints) {
+            const hw = baseWidthM / 2; const hd = baseDepthM / 2;
+            const pts = [{ x: -hw, y: -hd }, { x: hw, y: -hd }, { x: hw, y: hd }, { x: -hw, y: hd }];
+            return { points: pts, curves: null, centroid: { x: 0, y: 0 } };
+        }
+        return normalizeWithCurves(basePoints, baseCurves);
+    }, [basePoints, baseCurves, baseWidthM, baseDepthM]);
+
+    // 樓層量體生成邏輯 (Massing generation logic - Refactored for multi-site)
+    function buildMassingLayers(siteRes, site, normalizedData, effectiveFrontIndices, combinedEdgeTypes, targetFAbove, applyFallingCurve = false, fallingCurveValue = 0) {
+        const inputs = site.inputs;
+        const floorSettings = site.floorSettings || {};
+        const layers = [];
+        const limitCFA = siteRes.totalCFA;
+        const floorsBelow = Math.max(0, parseInt(inputs.floorsBelow) || 0);
+        const basementAreaPerFloor = siteRes.basementAreaPerFloor || 0;
+        const exemptBasement = siteRes.exemptBasement || 0;
+        const activeBasementArea = Array.from({ length: floorsBelow }).length * basementAreaPerFloor;
+        const taxableBasementArea = Math.max(0, activeBasementArea - exemptBasement);
+        const availableForSuperstructure = Math.max(0, limitCFA - taxableBasementArea);
+
+        let remainingAreaM2 = availableForSuperstructure;
+
+        let currentZM = 0;
+        let floorCount = 0;
+        let currentTotalUsed = taxableBasementArea;
+
+        const targetFloorsAbove = targetFAbove;
+        const fullFloorsTarget = Math.floor(targetFloorsAbove);
+        const isFloorConfigSet = (site.id === activeSiteId && manualFloorsOverride !== null);
+        const fractionalFloorRatio = Math.max(0, targetFloorsAbove - fullFloorsTarget);
+        const maxSimulatedFloors = Math.min(targetFloorsAbove, 100);
+        const targetFloorsInt = Math.max(1, Math.round(targetFloorsAbove || 1));
+
+        let actualMinRandomArea = minRandomAreaM2;
+        if (site.id === activeSiteId && manualFloorsOverride !== null) {
+            actualMinRandomArea = Math.min(minRandomAreaM2, availableForSuperstructure / targetFloorsInt);
+        }
+        const minRandomTotal = actualMinRandomArea * targetFloorsInt;
+        const useRandomSizes = (site.id === activeSiteId) && randomSlabEnabled && (availableForSuperstructure >= minRandomTotal || manualFloorsOverride !== null);
+        const randomFn = useRandomSizes ? createSeededRandom(randomSlabSeed || 1) : null;
+        const baseWidthM = parseFloat(inputs.baseWidthM || inputs.baseWidth || 20);
+        const baseDepthM = parseFloat(inputs.baseDepthM || 20);
+        const frontM = parseFloat(inputs.frontYardDepth) || 0;
+        const backM = parseFloat(inputs.backYardDepth) || 0;
+        const sideM = parseFloat(inputs.sideYardDepth) || 0;
+        const arcadeM = (inputs.frontYardDepth == 0 && inputs.arcadeDepth) ? parseFloat(inputs.arcadeDepth) : 0;
+        const roadW_M = parseFloat(getSiteRoads(site).find(r => r.type === 'primary')?.width || 6);
+        const byRatio = parseFloat(inputs.minBackyardDepthRatio) || 0;
+        const sideDir = inputs.sideYardDirection || 'right';
+
+        const oneFFrontM = arcadeM > 0 ? Math.max(frontM, arcadeM) : frontM;
+        let oneFFootprint = null;
+        if (normalizedData.points) {
+            const res = offsetPolygon(normalizedData.points, combinedEdgeTypes, { front: oneFFrontM, back: backM, side: sideM }, effectiveFrontIndices, normalizedData.curves);
+            oneFFootprint = res ? res.points : null;
+        }
+        const oneFFootprintArea = oneFFootprint ? calculatePolygonArea(oneFFootprint) : 0;
+        const projectionBoxWidthM = Math.max(0, baseWidthM - sideM);
+        const projectionBoxDepthM = Math.max(0, baseDepthM - oneFFrontM - backM);
+        const projectionBoxArea = projectionBoxWidthM * projectionBoxDepthM;
+        const shouldClampToProjection = (site.id === activeSiteId && isConstraintMode) || (showCheckLines && (showHeightRatio || showWeiLao || showBackyard || showFallingCurve));
+        const projectionAreaLimit = normalizedData.points ? oneFFootprintArea : projectionBoxArea;
+        let firstFloorFinalArea = null;
+
+        while ((remainingAreaM2 > 0.1 || floorCount < targetFloorsAbove || (useRandomSizes && isFloorConfigSet && floorCount < targetFloorsAbove)) && floorCount < maxSimulatedFloors) {
+            if (currentTotalUsed >= limitCFA - 0.1 && (!isFloorConfigSet || floorCount >= targetFloorsAbove)) break;
+            if (currentTotalUsed >= limitCFA && isFloorConfigSet && useRandomSizes) break; 
+
+            if (remainingAreaM2 <= 0.1 && !isFloorConfigSet) break;
+            const floorId = `${floorCount + 1}F`;
+            const settings = floorSettings[floorId] || {};
+            const h = (floorCount === 0) ? (parseFloat(inputs.floorHeight1F) || 4.2) : (parseFloat(inputs.floorHeightOther) || 3.6);
+
+            // IMPORTANT: Check constraints at the TOP of the current floor
+            const checkZ = currentZM + h;
+
+            // --- Dynamic Setback Calculation ---
+            let currentFrontM = frontM;
+            let effectiveBackM = backM;
+            let effectiveSideM = sideM;
+
+            // Base Setbacks (Without Review Lines) for comparison
+            let baseFrontM = frontM;
+            let baseBackM = backM;
+
+            // Arcade handling
+            if (floorCount === 0 && arcadeM > 0) {
+                currentFrontM = Math.max(currentFrontM, arcadeM);
+                baseFrontM = Math.max(baseFrontM, arcadeM);
+            }
+
+            if (isConstraintMode || showCheckLines) {
+                if (showHeightRatio && byRatio <= 0) {
+                    const reqFrontHR = (checkZ / 3.6) - roadW_M;
+                    if (reqFrontHR > currentFrontM) currentFrontM = reqFrontHR;
+                }
+                if (showWeiLao) {
+                    const reqFrontWL = (checkZ / 5.0) - (roadW_M / 2);
+                    if (reqFrontWL > currentFrontM) currentFrontM = reqFrontWL;
+                }
+            }
+
+            if ((isConstraintMode || showCheckLines) && byRatio > 0) {
+                const reqBack = checkZ / byRatio;
+                if (effectiveBackM < reqBack) effectiveBackM = reqBack;
+            }
+
+            const requireFallingCurve = applyFallingCurve && checkZ > 50;
+            if (requireFallingCurve && fallingCurveValue > 0) {
+                if (currentFrontM < fallingCurveValue) currentFrontM = fallingCurveValue;
+                if (effectiveBackM < fallingCurveValue) effectiveBackM = fallingCurveValue;
+                if (effectiveSideM < fallingCurveValue) effectiveSideM = fallingCurveValue;
+            }
+
+            const maxBaseBackM = Math.max(0, baseDepthM - baseFrontM);
+            if (baseBackM > maxBaseBackM) baseBackM = maxBaseBackM;
+
+            const maxFrontM = Math.max(0, baseDepthM - baseBackM);
+            if (currentFrontM > maxFrontM) currentFrontM = maxFrontM;
+
+            const maxBackM = Math.max(0, baseDepthM - currentFrontM);
+            if (effectiveBackM > maxBackM) effectiveBackM = maxBackM;
+
+            // Recalculate polygon OR Box dimensions based on dynamic setbacks
+            let floorPolygon = null;
+            let floorPolygonArea = 0;
+
+            // Calculate Static Polygon (Before Review Cuts) for Unused Area display
+            let staticPolygon = null;
+            let staticArea = 0;
+
+            // --- Box Mode Calculation Variables ---
+            let boxWidthM = 0;
+            let boxDepthM = 0;
+            let shiftX_M = 0;
+            let shiftY_M = 0;
+
+            if (normalizedData.points) {
+                // Polygon Mode
+                // 1. Calculate Actual Floor (Dynamic)
+                if (isConstraintMode || (showCheckLines && byRatio > 0) || currentFrontM > frontM || effectiveBackM > backM || effectiveSideM > sideM || (floorCount === 0 && arcadeM > 0)) {
+                    const res = offsetPolygon(normalizedData.points, combinedEdgeTypes, { front: currentFrontM, back: effectiveBackM, side: effectiveSideM }, effectiveFrontIndices, normalizedData.curves);
+                    floorPolygon = res ? res.points : null;
+                } else {
+                    floorPolygon = oneFFootprint; // Reuse 1F if no change
+                }
+                floorPolygonArea = floorPolygon ? calculatePolygonArea(floorPolygon) : 0;
+
+                // 2. Calculate Static Floor (Base Constraints Only)
+                if (currentFrontM > baseFrontM || effectiveBackM > baseBackM || effectiveSideM > sideM) {
+                    const staticRes = offsetPolygon(normalizedData.points, combinedEdgeTypes, { front: baseFrontM, back: baseBackM, side: sideM }, effectiveFrontIndices, normalizedData.curves);
+                    staticPolygon = staticRes ? staticRes.points : null;
+                    staticArea = staticPolygon ? calculatePolygonArea(staticPolygon) : 0;
+                } else {
+                    staticPolygon = floorPolygon;
+                    staticArea = floorPolygonArea;
+                }
+                if (shouldClampToProjection && oneFFootprint) {
+                    staticPolygon = oneFFootprint;
+                    staticArea = oneFFootprintArea;
+                }
+            } else {
+                // Box Mode
+                // Dynamic
+                boxWidthM = Math.max(0, baseWidthM - effectiveSideM);
+                boxDepthM = Math.max(0, baseDepthM - currentFrontM - effectiveBackM);
+                if (shouldClampToProjection && projectionBoxDepthM > 0 && boxDepthM > projectionBoxDepthM) {
+                    boxDepthM = projectionBoxDepthM;
+                }
+                floorPolygonArea = boxWidthM * boxDepthM;
+
+                // Static
+                const staticDepthM = Math.max(0, baseDepthM - baseFrontM - baseBackM);
+                staticArea = boxWidthM * staticDepthM;
+                if (shouldClampToProjection && projectionBoxArea > 0) {
+                    staticArea = projectionBoxArea;
+                }
+                // We don't have points for Box Mode easily without generating rects, 
+                // but BuildingLayer handles box mode via width/depth.
+                // We can pass `staticDepth` to layer.
+
+                // Calculate Shift for Box (Relative to Center)
+                shiftY_M = (effectiveBackM - currentFrontM) / 2;
+
+                // X Shift: Based on Side Direction
+                if (sideDir === 'left') shiftX_M = effectiveSideM / 2;
+                else if (sideDir === 'right') shiftX_M = -effectiveSideM / 2;
+            }
+
+            let allowedPolygon = floorPolygon;
+            if (staticPolygon && allowedPolygon) {
+                allowedPolygon = clipPolygonByPolygon(staticPolygon, allowedPolygon);
+            }
+            if (floorCount > 0 && firstFloorFinalArea && allowedPolygon) {
+                allowedPolygon = clipPolygonByPolygon(allowedPolygon, firstFloorFinalArea);
+            }
+            if (allowedPolygon !== floorPolygon) {
+                floorPolygon = allowedPolygon;
+                floorPolygonArea = floorPolygon ? calculatePolygonArea(floorPolygon) : 0;
+            }
+
+            const coverageLimit = parseFloat(res.maxBuildingArea) || 0;
+            let maxFloorAreaM2 = coverageLimit > 0 ? Math.min(floorPolygonArea, coverageLimit) : floorPolygonArea;
+            if (shouldClampToProjection && projectionAreaLimit > 0) {
+                maxFloorAreaM2 = Math.min(maxFloorAreaM2, projectionAreaLimit);
+            }
+
+            // Task 2: Do not generate tiny fragments (Unused Area rule), unless we MUST generate the target number of floors
+            if (maxFloorAreaM2 <= 3.0 && !settings.manualDim && !settings.manualArea) {
+                const mustGenerateMore = randomSlabEnabled && isFloorConfigSet && floorCount < targetFloorsAbove;
+                if (!mustGenerateMore) {
+                    break;
+                }
+            }
+
+            let visualWidthM = boxWidthM;
+            let visualDepthM = boxDepthM;
+            let rotation = settings.rotation || 0;
+            let usedAreaM2 = 0;
+
+            const useEvenArea = manualFloorsOverride !== null && targetFloorsAbove > 0 && !randomSlabEnabled;
+            const evenAreaPerFloor = useEvenArea ? (availableForSuperstructure / targetFloorsAbove) : null;
+            // Determine Area Usage
+            if (settings.manualDim && settings.width !== undefined && settings.depth !== undefined) {
+                visualWidthM = settings.width; visualDepthM = settings.depth; usedAreaM2 = visualWidthM * visualDepthM;
+            }
+            else if (settings.manualArea && settings.area !== undefined) {
+                usedAreaM2 = settings.area;
+            }
+            else {
+                if (useEvenArea && Number.isFinite(evenAreaPerFloor)) {
+                    const perFloorAreaCap = Math.min(maxFloorAreaM2, evenAreaPerFloor);
+                    usedAreaM2 = Math.min(remainingAreaM2, perFloorAreaCap);
+                } else if (useRandomSizes && randomFn) {
+                    const isFractionalFloor = fractionalFloorRatio > 0 && floorCount === fullFloorsTarget;
+                    const perFloorAreaCap = isFractionalFloor ? maxFloorAreaM2 * fractionalFloorRatio : maxFloorAreaM2;
+
+                    let currentMin = minRandomAreaM2;
+                    if (manualFloorsOverride !== null) {
+                        currentMin = Math.min(minRandomAreaM2, availableForSuperstructure / Math.max(1, targetFloorsAbove));
+                    }
+                    const minAllowed = Math.min(currentMin, perFloorAreaCap);
+
+                    const mustGenerateMore = randomSlabEnabled && isFloorConfigSet && floorCount < targetFloorsAbove;
+                    let randArea = minAllowed + (perFloorAreaCap - minAllowed) * randomFn();
+
+                    if (mustGenerateMore && remainingAreaM2 <= minAllowed) {
+                        // Strictly cap borrow amount so we do not exceed total CFA
+                        const maxBorrowable = limitCFA - currentTotalUsed;
+                        usedAreaM2 = Math.min(randArea, maxBorrowable);
+                    } else {
+                        usedAreaM2 = Math.min(remainingAreaM2, randArea);
+                    }
+                } else {
+                    const isFractionalFloor = fractionalFloorRatio > 0 && floorCount === fullFloorsTarget;
+                    const perFloorAreaCap = isFractionalFloor ? maxFloorAreaM2 * fractionalFloorRatio : maxFloorAreaM2;
+                    usedAreaM2 = Math.min(remainingAreaM2, perFloorAreaCap);
+                }
+            }
+
+            if (shouldClampToProjection && projectionAreaLimit > 0) {
+                usedAreaM2 = Math.min(usedAreaM2, projectionAreaLimit);
+            }
+
+            if (site.id === activeSiteId && isConstraintMode) {
+                usedAreaM2 = Math.min(usedAreaM2, maxFloorAreaM2);
+            }
+
+            // Calculate Final Geometry
+            let layerPoints = settings.points || null;
+            let layerCurves = settings.curves || null;
+
+            if (layerPoints && normalizedData.centroid) {
+                const c = normalizedData.centroid;
+                layerPoints = layerPoints.map(p => ({ x: p.x - c.x, y: p.y - c.y }));
+                if (layerCurves) {
+                    const newC = {};
+                    Object.keys(layerCurves).forEach(k => {
+                        const cp = layerCurves[k];
+                        newC[k] = { x: cp.x - c.x, y: cp.y - c.y };
+                    });
+                    layerCurves = newC;
+                }
+            }
+
+            if (useRandomSizes && layerPoints && !settings.manualDim && !settings.manualArea && usedAreaM2 > 0) {
+                const baseArea = calculatePolygonArea(layerPoints);
+                if (baseArea > 0 && Math.abs(baseArea - usedAreaM2) > 0.01) {
+                    const scaleRate = Math.sqrt(usedAreaM2 / baseArea);
+                    const scaled = scalePolygon(layerPoints, layerCurves, scaleRate);
+                    layerPoints = scaled.points;
+                    layerCurves = scaled.curves;
+                }
+            }
+
+            if (layerPoints && shouldClampToProjection && oneFFootprint) {
+                const fitted = fitPolygonWithin(layerPoints, layerCurves, oneFFootprint);
+                layerPoints = fitted.points;
+                layerCurves = fitted.curves;
+                usedAreaM2 = Math.min(usedAreaM2, calculatePolygonArea(layerPoints));
+            }
+
+            if (!layerPoints && floorPolygon) {
+                layerPoints = floorPolygon;
+                // If we need to scale down (e.g. not enough remaining area)
+                if (usedAreaM2 < floorPolygonArea - 0.1) {
+                    const scaleRate = Math.sqrt(usedAreaM2 / floorPolygonArea);
+                    const polyCentroid = normalizedData.centroid || getPolygonCentroid(floorPolygon);
+                    const { points: newPts, curves: newCurves } = scalePolygon(floorPolygon, null, scaleRate, polyCentroid);
+                    layerPoints = newPts;
+                    layerCurves = newCurves;
+                }
+                if (shouldClampToProjection && oneFFootprint) {
+                    const fitted = fitPolygonWithin(layerPoints, layerCurves, oneFFootprint);
+                    layerPoints = fitted.points;
+                    layerCurves = fitted.curves;
+                    const clampedArea = calculatePolygonArea(layerPoints);
+                    usedAreaM2 = Math.min(usedAreaM2, clampedArea);
+                }
+            } else if (!layerPoints && !normalizedData.points) {
+                // Box Mode Scaling (if using less than max area)
+                const usageRatio = maxFloorAreaM2 > 0 ? usedAreaM2 / maxFloorAreaM2 : 0;
+                const scaleFactor = Math.sqrt(usageRatio);
+                visualWidthM = boxWidthM * scaleFactor;
+                visualDepthM = boxDepthM * scaleFactor;
+                const visualArea = visualWidthM * visualDepthM;
+                if (shouldClampToProjection && projectionAreaLimit > 0 && visualArea > projectionAreaLimit + 0.01) {
+                    const scaleRate = Math.sqrt(projectionAreaLimit / visualArea);
+                    visualWidthM *= scaleRate;
+                    visualDepthM *= scaleRate;
+                    usedAreaM2 = Math.min(usedAreaM2, projectionAreaLimit);
+                }
+            }
+
+            if (layerPoints && allowedPolygon) {
+                if (!allInsidePolygon(layerPoints, allowedPolygon)) {
+                    layerPoints = clipPolygonByPolygon(layerPoints, allowedPolygon);
+                    layerCurves = null;
+                }
+                if (layerPoints) {
+                    usedAreaM2 = Math.min(usedAreaM2, calculatePolygonArea(layerPoints));
+                } else {
+                    usedAreaM2 = 0;
+                }
+            }
+
+            if (floorCount === 0 && layerPoints) {
+                firstFloorFinalArea = layerPoints;
+            }
+
+            // Manual Offsets (User dragging)
+            const alignPref = settings.alignment || { x: 'left', y: 'back' };
+            const getOffsets = () => {
+                if (settings.offset) return settings.offset;
+                return { x: 0, y: 0 };
+            }
+            const userOff = getOffsets();
+
+            let finalShiftYPx, finalShiftX;
+            if (layerPoints) {
+                // Polygon Mode
+                finalShiftYPx = userOff.y * scale;
+                finalShiftX = userOff.x * scale;
+            } else {
+                // Box Mode: Combine calculated shift with user offset
+                finalShiftX = (shiftX_M * scale) + (settings.offset?.x || 0);
+                finalShiftYPx = (shiftY_M * scale) + (settings.offset?.y || 0);
+            }
+
+            const violations = [];
+
+            // Task 3: Unit Division Support
+            let splitUnits = null;
+            let isAutoSplit = false;
+
+            if (unitSettings?.enabled && floorPolygon) {
+                splitUnits = getSplitUnits(floorPolygon, unitSettings);
+                isAutoSplit = true;
+            } else if (settings.units && settings.units.length > 0) {
+                // Manual units
+                splitUnits = settings.units;
+            }
+
+            if (splitUnits && splitUnits.length > 0) {
+                splitUnits.forEach((uPts, uIdx) => {
+                    let finalUPts = uPts;
+
+                    const uArea = calculatePolygonArea(finalUPts);
+                    const uUsed = Math.min(uArea, remainingAreaM2); // Cap by FAR
+
+                    layers.push({
+                        id: `${floorId}-${String.fromCharCode(65 + uIdx)}`, // A, B, C...
+                        z: currentZM * scale,
+                        height: h * scale,
+                        widthPx: visualWidthM * scale,
+                        depthPx: visualDepthM * scale,
+                        shiftX: finalShiftX,
+                        shiftYPx: finalShiftYPx,
+                        rotation: rotation,
+                        pivot: settings.pivot,
+                        realArea: uUsed,
+                        realWidth: visualWidthM, // Approx
+                        realDepth: visualDepthM, // Approx
+                        realHeight: h,
+                        maxGeometricArea: uArea,
+                        isViolation: violations.length > 0,
+                        violations: violations,
+                        points: finalUPts,
+                        curves: null, // Curves not supported in split yet
+                        staticPoints: null, // Manual mode implies no auto-ghosting
+                        unusedReviewArea: 0
+                    });
+
+                    let areaToDeduct = uUsed;
+                    if (randomSlabEnabled && isFloorConfigSet && remainingAreaM2 <= 0 && uUsed > 0) {
+                        areaToDeduct = 0;
+                    }
+                    remainingAreaM2 -= areaToDeduct;
+                    currentTotalUsed += uUsed;
+                });
+            } else {
+                layers.push({
+                    id: floorId,
+                    z: currentZM * scale,
+                    height: h * scale,
+
+                    widthPx: visualWidthM * scale,
+                    depthPx: visualDepthM * scale,
+
+                    shiftX: finalShiftX,
+                    shiftYPx: finalShiftYPx,
+
+                    rotation: rotation,
+                    pivot: settings.pivot,
+                    realArea: usedAreaM2,
+                    realWidth: visualWidthM,
+                    realDepth: visualDepthM,
+                    realHeight: h,
+                    maxGeometricArea: maxFloorAreaM2,
+                    isViolation: violations.length > 0,
+                    violations: violations,
+                    points: layerPoints,
+                    curves: layerCurves,
+
+                    // Task 2 Data
+                    staticPoints: staticPolygon,
+                    unusedReviewArea: Math.max(0, staticArea - usedAreaM2)
+                });
+
+                let areaToDeduct = usedAreaM2;
+                if (randomSlabEnabled && isFloorConfigSet && remainingAreaM2 <= 0 && usedAreaM2 > 0) {
+                    areaToDeduct = 0;
+                }
+                remainingAreaM2 -= areaToDeduct;
+                currentTotalUsed += usedAreaM2;
+            }
+            currentZM += h; floorCount++;
+        }
+        return { layers, totalFloors: floorCount, totalHeight: currentZM, currentTotalUsed, remainingArea: Math.max(0, remainingAreaM2) };
+    };
+
+    const baseMassingLayers = useMemo(() => buildMassingLayers(res, activeSite, normalizedData, frontageIndices, edgeTypes, targetFloorsAbove, false, 0), [res, activeSite, normalizedData, frontageIndices, edgeTypes, targetFloorsAbove, inputs, floorSettings, showCheckLines, showHeightRatio, showWeiLao, showBackyard, showFallingCurve, isConstraintMode, manualFloorsOverride, randomSlabEnabled, randomSlabSeed]);
+    const baseHeight = baseMassingLayers.totalHeight;
+    const fallingCurveRequired = baseHeight > 50;
+    const fallingCurveD = fallingCurveRequired ? Math.sqrt(baseHeight) / 2 : 0;
+
+    const massingLayers = useMemo(() => buildMassingLayers(res, activeSite, normalizedData, frontageIndices, edgeTypes, targetFloorsAbove, fallingCurveRequired, fallingCurveD), [res, activeSite, normalizedData, frontageIndices, edgeTypes, targetFloorsAbove, fallingCurveRequired, fallingCurveD, inputs, floorSettings, showCheckLines, showHeightRatio, showWeiLao, showBackyard, showFallingCurve, isConstraintMode, manualFloorsOverride, randomSlabEnabled, randomSlabSeed]);
+
+    useEffect(() => {
+        if (fallingCurveRequired) {
+            if (!showFallingCurve) setShowFallingCurve(true);
+            setShowCheckLines(true);
+        } else if (showFallingCurve) {
+            setShowFallingCurve(false);
+        }
+    }, [fallingCurveRequired, showFallingCurve]);
+
+    const handleAddFloor = () => {
+        if (massingLayers.currentTotalUsed >= res.totalCFA) {
+            alert("已達最大允建總樓地板面積 (Total CFA) 上限，無法新增樓層。");
+            return;
+        }
+        setManualFloorsOverride((prev) => { const base = prev !== null ? prev : massingLayers.totalFloors; const next = base + 1; onUpdateInputs('floorsAbove', next); return next; });
+    };
+    const handleRemoveFloor = () => { const newFloorsAbove = Math.max(1, (manualFloorsOverride !== null ? manualFloorsOverride : massingLayers.totalFloors) - 1); setManualFloorsOverride(newFloorsAbove); onUpdateInputs('floorsAbove', newFloorsAbove); if (selectedFloor && !['base', 'excavation'].includes(selectedFloor.id)) { const floorNum = parseInt(selectedFloor.id); if (!isNaN(floorNum) && floorNum > newFloorsAbove) { setSelectedFloor(null); } } };
+    const handleSetFloorsAbove = (value) => { const numeric = Number.isFinite(value) ? value : parseFloat(value); const safe = Math.max(1, Number.isFinite(numeric) ? numeric : 1); setManualFloorsOverride(safe); onUpdateInputs('floorsAbove', safe); if (selectedFloor && !['base', 'excavation'].includes(selectedFloor.id)) { const floorNum = parseInt(selectedFloor.id); if (!isNaN(floorNum) && floorNum > safe) { setSelectedFloor(null); } } };
+    const handleApplyAllFloors = (payload) => {
+        if (!payload || !payload.area || payload.area <= 0) return;
+        const taxableBasementArea = Math.max(0, activeBasementArea - res.exemptBasement);
+        const availableForSuperstructure = Math.max(0, res.totalCFA - taxableBasementArea);
+        const targetFloors = Math.max(1, Math.round(manualFloorsOverride !== null ? manualFloorsOverride : (parseFloat(inputs.floorsAbove || 0) || res.floorsAbove || 1)));
+        let areaPerFloor = payload.area;
+        if (availableForSuperstructure > 0) areaPerFloor = availableForSuperstructure / targetFloors;
+        const finalFloors = targetFloors;
+        setManualFloorsOverride(finalFloors);
+        onUpdateInputs('floorsAbove', finalFloors);
+        setFloorSettings(prev => {
+            const next = { ...prev };
+            const offset = payload.offset || { x: 0, y: 0 };
+            for (let i = 1; i <= finalFloors; i++) {
+                const floorId = `${i}F`;
+                const current = next[floorId] || {};
+                if (payload.mode === 'polygon' && payload.points && payload.points.length >= 3) {
+                    let points = payload.points;
+                    let curves = payload.curves || null;
+                    const currentArea = calculatePolygonArea(payload.points);
+                    if (currentArea > 0 && Math.abs(currentArea - areaPerFloor) > 0.01) {
+                        const scaleRate = Math.sqrt(areaPerFloor / currentArea);
+                        const scaled = scalePolygon(payload.points, payload.curves || null, scaleRate);
+                        points = scaled.points;
+                        curves = scaled.curves;
+                    }
+                    next[floorId] = { ...current, points, curves, area: areaPerFloor, manualArea: true, manualDim: false, offset };
+                    delete next[floorId].width;
+                    delete next[floorId].depth;
+                } else {
+                    const baseW = payload.width || baseWidthM;
+                    const baseD = payload.depth || baseDepthM;
+                    const baseArea = baseW * baseD;
+                    let width = baseW;
+                    let depth = baseD;
+                    if (baseArea > 0 && Math.abs(baseArea - areaPerFloor) > 0.01) {
+                        const scaleRate = Math.sqrt(areaPerFloor / baseArea);
+                        width = baseW * scaleRate;
+                        depth = baseD * scaleRate;
+                    }
+                    next[floorId] = { ...current, width, depth, manualDim: true, manualArea: false, area: width * depth, offset };
+                    delete next[floorId].points;
+                    delete next[floorId].curves;
+                }
+            }
+            Object.keys(next).forEach(k => {
+                const m = /^(\d+)F$/.exec(k);
+                if (m && parseInt(m[1]) > finalFloors) delete next[k];
+            });
+            return next;
+        });
+        if (selectedFloor && !['base', 'excavation'].includes(selectedFloor.id)) {
+            const floorNum = parseInt(selectedFloor.id);
+            if (!isNaN(floorNum) && floorNum > finalFloors) setSelectedFloor(null);
+        }
+    };
+
+    const handleAutoDistributeUnusedArea = () => {
+        const remainingTotal = Math.max(0, unusedArea);
+        if (remainingTotal <= 0.1) return;
+        const layerMap = new Map();
+        massingLayers.layers.forEach(layer => {
+            if (/^\d+F$/.test(layer.id)) layerMap.set(layer.id, layer);
+        });
+        const candidateIds = Array.from(layerMap.keys()).sort((a, b) => parseInt(a) - parseInt(b));
+        if (candidateIds.length === 0) return;
+        const slackById = new Map();
+        candidateIds.forEach(id => {
+            const layer = layerMap.get(id);
+            const maxArea = Math.max(0, layer?.maxGeometricArea || 0);
+            const currentArea = Math.max(0, layer?.realArea || 0);
+            const slack = Math.max(0, maxArea - currentArea);
+            if (slack > 0.1) slackById.set(id, slack);
+        });
+        const activeCandidates = Array.from(slackById.keys());
+        if (activeCandidates.length === 0) return;
+        const allocations = {};
+        let remaining = remainingTotal;
+        let active = activeCandidates.slice();
+        let guard = 0;
+        while (remaining > 0.01 && active.length > 0 && guard < 10) {
+            const per = remaining / active.length;
+            const next = [];
+            active.forEach(id => {
+                const slack = (slackById.get(id) || 0) - (allocations[id] || 0);
+                const add = Math.min(slack, per);
+                if (add > 0) {
+                    allocations[id] = (allocations[id] || 0) + add;
+                    remaining -= add;
+                }
+                if (slack - add > 0.01) next.push(id);
+            });
+            active = next;
+            guard += 1;
+        }
+        const floorEntries = Object.entries(allocations).filter(([, v]) => v > 0.01);
+        if (floorEntries.length === 0) return;
+        setFloorSettings(prev => {
+            const next = { ...prev };
+            floorEntries.forEach(([id, addArea]) => {
+                const layer = layerMap.get(id);
+                if (!layer) return;
+                const currentArea = Math.max(0, layer.realArea || 0);
+                const newArea = currentArea + addArea;
+                const current = next[id] || {};
+                if (layer.points && layer.points.length >= 3) {
+                    const basePoints = current.points || layer.points;
+                    const baseCurves = current.curves || layer.curves || null;
+                    const baseArea = calculatePolygonArea(basePoints);
+                    if (baseArea > 0) {
+                        const scaleRate = Math.sqrt(newArea / baseArea);
+                        const scaled = scalePolygon(basePoints, baseCurves, scaleRate);
+                        next[id] = { ...current, points: scaled.points, curves: scaled.curves, area: newArea, manualArea: true, manualDim: false };
+                        delete next[id].width;
+                        delete next[id].depth;
+                    }
+                } else {
+                    const baseW = current.width || layer.realWidth || 0;
+                    const baseD = current.depth || layer.realDepth || 0;
+                    const baseArea = baseW * baseD;
+                    if (baseArea > 0) {
+                        const scaleRate = Math.sqrt(newArea / baseArea);
+                        const width = baseW * scaleRate;
+                        const depth = baseD * scaleRate;
+                        next[id] = { ...current, width, depth, manualDim: true, manualArea: false, area: width * depth };
+                        delete next[id].points;
+                        delete next[id].curves;
+                    }
+                }
+            });
+            return next;
+        });
+    };
+
+    useEffect(() => { if (selectedFloor) { const layer = massingLayers.layers.find(l => l.id === selectedFloor.id); if (layer) { setSelectedFloor({ ...layer, rotation: floorSettings[layer.id]?.rotation || 0, pivot: floorSettings[layer.id]?.pivot || { x: 0, y: 0 }, alignment: floorSettings[layer.id]?.alignment || { x: 'left', y: 'back' }, violations: layer.violations, points: floorSettings[layer.id]?.points || null, curves: floorSettings[layer.id]?.curves || null }); } } }, [floorSettings, isConstraintMode]);
+
+    const floorLayers = massingLayers.layers;
+    const colors = { bg: isDarkMode ? "#0f172a" : "#fafaf9", grid: isDarkMode ? "linear-gradient(#1e293b 1px, transparent 1px), linear-gradient(90deg, #1e293b 1px, transparent 1px)" : "linear-gradient(#e5e7eb 1px, transparent 1px), linear-gradient(90deg, #e5e7eb 1px, transparent 1px)", floor: showCheckLines ? (isDarkMode ? "rgba(255, 255, 255, 0.1)" : "rgba(255, 255, 255, 0.3)") : (isDarkMode ? "rgba(255, 255, 255, 0.9)" : "#ffffff"), stroke: showCheckLines ? "#fb923c" : (isDarkMode ? "#94a3b8" : "#a8a29e") };
+    const visualTotalH_Px = massingLayers.totalHeight * scale;
+    const visualFloorsAbove = massingLayers.totalFloors;
+    const floorsAboveValue = manualFloorsOverride !== null ? manualFloorsOverride : (parseFloat(inputs.floorsAbove || 0) || res.floorsAbove);
+    const totalAreaViolation = massingLayers.currentTotalUsed > volumeLimit;
+    const unusedArea = massingLayers.remainingArea;
+
+    useEffect(() => {
+        if (onUnusedAreaChange) onUnusedAreaChange(unusedArea);
+    }, [unusedArea, onUnusedAreaChange]);
+
+    useEffect(() => {
+        if (unusedArea > 0.1) {
+            const key = `${Math.round(unusedArea * 10)}-${visualFloorsAbove}-${inputs.floorsBelow}-${Math.round(res.totalCFA)}`;
+            if (key !== unusedPromptKey) {
+                setUnusedPromptKey(key);
+                setShowUnusedPrompt(true);
+            }
+        } else if (showUnusedPrompt) {
+            setShowUnusedPrompt(false);
+        }
+    }, [unusedArea, visualFloorsAbove, inputs.floorsBelow, res.totalCFA, unusedPromptKey, showUnusedPrompt]);
+
+    // Pre-calculate Normalized Base Points for the entire visualization context
+    // This ensures all layers share the same "Site Center" origin.
+    // OLD: const normalizedBasePoints = useMemo(...) -> Replaced by normalizedData above
+
+    const renderRoads = (ps) => {
+        const site = ps.site;
+        // 如果不是第一個主基地 A，則不實體繪製道路（面前道路條件只供退縮計算，不渲染新道路）
+        if (site.id !== (sites[0]?.id || 1)) return null;
+        
+        const normalizedData = ps.normalized;
+        // 將道路點坐標透過 toWorldPts 直接轉為 WCS，保證與主基地 A 同步對齊
+        const normalizedPoints = normalizedData.points;
+        const N = normalizedPoints.length;
+        if (!normalizedPoints || normalizedPoints.length === 0) return null;
+
+        const allSegments = [];
+        (getSiteRoads(site)).forEach(road => {
+            const indices = road.edgeIndices || (road.edgeIndex !== undefined && road.edgeIndex !== "" ? [parseInt(road.edgeIndex)] : []);
+            indices.forEach(idx => {
+                allSegments.push({
+                    edgeIdx: idx,
+                    width: parseFloat(road.width) || 6,
+                    name: road.name || (road.type === 'primary' ? '主要道路' : '次要道路'),
+                    roadId: road.id,
+                    type: road.type
+                });
+            });
+        });
+
+        if (allSegments.length === 0) return null;
+        allSegments.sort((a, b) => a.edgeIdx - b.edgeIdx);
+
+        const groups = [];
+        if (allSegments.length > 0) {
+            let curGroup = [allSegments[0]];
+            for (let i = 1; i < allSegments.length; i++) {
+                const prev = curGroup[curGroup.length - 1];
+                const curr = allSegments[i];
+                if (curr.edgeIdx === prev.edgeIdx + 1 && Math.abs(curr.width - prev.width) < 0.01) {
+                    curGroup.push(curr);
+                } else {
+                    groups.push(curGroup);
+                    curGroup = [curr];
+                }
+            }
+            if (groups.length > 0) {
+                const first = groups[0][0];
+                const last = curGroup[curGroup.length - 1];
+                if (last.edgeIdx === N - 1 && first.edgeIdx === 0 && Math.abs(last.width - first.width) < 0.01) {
+                    groups[0] = [...curGroup, ...groups[0]];
+                } else {
+                    groups.push(curGroup);
+                }
+            } else {
+                groups.push(curGroup);
+            }
+        }
+
+        const paths = [];
+        const labels = [];
+        groups.forEach((grp, gIdx) => {
+            const roadRW = grp[0].width;
+            const isLoop = (grp.length === N);
+            const shouldExtend = !isLoop;
+            const EXT_LEN = 50;
+
+            let rawPoints = [];
+            let rawCurves = [];
+            grp.forEach(seg => {
+                rawPoints.push(normalizedPoints[seg.edgeIdx % N]);
+                rawCurves.push(normalizedData.curves?.[seg.edgeIdx % N]);
+            });
+            const lastSeg = grp[grp.length - 1];
+            rawPoints.push(normalizedPoints[(lastSeg.edgeIdx + 1) % N]);
+
+            let finalPoints = [...rawPoints];
+            let finalCurves = [...rawCurves];
+
+            if (shouldExtend && rawPoints.length >= 2) {
+                const p0 = rawPoints[0]; const p1 = rawPoints[1]; const c0 = rawCurves[0];
+                let startDir = { x: p1.x - p0.x, y: p1.y - p0.y };
+                if (c0) startDir = { x: c0.x - p0.x, y: c0.y - p0.y };
+                const lenStart = Math.sqrt(startDir.x * startDir.x + startDir.y * startDir.y);
+                if (lenStart > 0) {
+                    finalPoints.unshift({ x: p0.x - (startDir.x / lenStart) * EXT_LEN, y: p0.y - (startDir.y / lenStart) * EXT_LEN });
+                    finalCurves.unshift(null);
+                }
+                const pn = rawPoints[rawPoints.length - 1]; const pn_1 = rawPoints[rawPoints.length - 2]; const cn_1 = rawCurves[rawCurves.length - 1];
+                let endDir = { x: pn.x - pn_1.x, y: pn.y - pn_1.y };
+                if (cn_1) endDir = { x: pn.x - cn_1.x, y: pn.y - cn_1.y };
+                const lenEnd = Math.sqrt(endDir.x * endDir.x + endDir.y * endDir.y);
+                if (lenEnd > 0) {
+                    finalPoints.push({ x: pn.x + (endDir.x / lenEnd) * EXT_LEN, y: pn.y + (endDir.y / lenEnd) * EXT_LEN });
+                    finalCurves.push(null);
+                }
+            }
+
+            const getOffsetLine = (p1, p2) => {
+                const normal = getSegmentNormal(p1, p2, {x:0,y:0});
+                const vx = -normal.x * roadRW; const vy = -normal.y * roadRW;
+                return { start: { x: p1.x + vx, y: p1.y + vy }, dir: { x: p2.x - p1.x, y: p2.y - p1.y }, vec: { x: vx, y: vy } };
+            };
+            const getIntersection = (l1, l2) => {
+                const x1 = l1.start.x; const y1 = l1.start.y; const x2 = x1 + l1.dir.x; const y2 = y1 + l1.dir.y;
+                const x3 = l2.start.x; const y3 = l2.start.y; const x4 = x3 + l2.dir.x; const y4 = y3 + l2.dir.y;
+                const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+                if (Math.abs(den) < 1e-6) return null;
+                const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+                return { x: x1 + t * (x2 - x1), y: y1 + t * (y2 - y1) };
+            };
+
+            const lines = [];
+            for (let i = 0; i < finalPoints.length - 1; i++) lines.push(getOffsetLine(finalPoints[i], finalPoints[i + 1]));
+
+            const outerPoints = [];
+            for (let i = 0; i < finalPoints.length; i++) {
+                let pt;
+                if (isLoop && !shouldExtend) {
+                    const l1 = lines[(i - 1 + lines.length) % lines.length];
+                    const l2 = lines[i % lines.length];
+                    pt = getIntersection(l1, l2) || { x: finalPoints[i].x + l1.vec.x, y: finalPoints[i].y + l1.vec.y };
+                } else {
+                    if (i === 0) { pt = { x: finalPoints[0].x + lines[0].vec.x, y: finalPoints[0].y + lines[0].vec.y }; }
+                    else if (i === finalPoints.length - 1) { pt = { x: finalPoints[i].x + lines[lines.length - 1].vec.x, y: finalPoints[i].y + lines[lines.length - 1].vec.y }; }
+                    else { const l1 = lines[i - 1]; const l2 = lines[i]; pt = getIntersection(l1, l2) || { x: finalPoints[i].x + l1.vec.x, y: finalPoints[i].y + l1.vec.y }; }
+                }
+                outerPoints.push(pt);
+            }
+
+            let innerPathD = ""; let outerPathD = "";
+            finalPoints.forEach((p, i) => {
+                const x = p.x * scale + w / 2; const y = p.y * scale + d / 2;
+                if (i === 0) innerPathD += `M ${x} ${y}`;
+                else { const curve = finalCurves[i - 1]; if (curve) innerPathD += ` Q ${curve.x * scale + w / 2} ${curve.y * scale + d / 2}, ${x} ${y}`; else innerPathD += ` L ${x} ${y}`; }
+            });
+            for (let i = outerPoints.length - 1; i >= 0; i--) {
+                const p = outerPoints[i]; const x = p.x * scale + w / 2; const y = p.y * scale + d / 2;
+                if (i === outerPoints.length - 1) outerPathD += ` L ${x} ${y}`;
+                else { const curve = finalCurves[i]; if (curve) { const l = lines[i]; const cp = { x: curve.x * scale + w / 2 + l.vec.x * scale, y: curve.y * scale + d / 2 + l.vec.y * scale }; outerPathD += ` Q ${cp.x} ${cp.y}, ${x} ${y}`; } else outerPathD += ` L ${x} ${y}`; }
+            }
+            paths.push(<path key={`road-path-${ps.site.id}-${gIdx}`} d={innerPathD + outerPathD + " Z"} fill={isDarkMode ? "rgba(71, 85, 105, 0.5)" : "rgba(148, 163, 184, 0.6)"} stroke={isDarkMode ? "#64748b" : "#94a3b8"} strokeWidth="1" strokeDasharray="5,5" />);
+
+            const midSegIdx = Math.floor((rawPoints.length - 1) / 2);
+            const seg = grp[midSegIdx];
+            if (seg) {
+                const p1 = rawPoints[midSegIdx]; const p2 = rawPoints[midSegIdx + 1]; const l = lines[midSegIdx + (shouldExtend ? 1 : 0)];
+                if (l) {
+                    const localX = (p1.x + p2.x) / 2 + l.vec.x / 2 / scale;
+                    const localY = (p1.y + p2.y) / 2 + l.vec.y / 2 / scale;
+                    const wx = ps.layout.x + localX * Math.cos(ps.layout.rotation) - localY * Math.sin(ps.layout.rotation);
+                    const wy = ps.layout.y + localX * Math.sin(ps.layout.rotation) + localY * Math.cos(ps.layout.rotation);
+                    const pos = projectWorldToScreen(wx, wy, 2);
+                    overlayLabelsBuffer.push({
+                        id: `road-label-${ps.site.id}-${gIdx}`,
+                        text: `${seg.name} ${seg.width}m`,
+                        origX: pos.x, origY: pos.y, x: pos.x, y: pos.y,
+                        width: 70, height: 20,
+                        className: "text-[10px] font-bold bg-white/80 text-stone-600 px-1 rounded shadow-sm",
+                        drawLeader: false
+                    });
+                }
+            }
+        });
+
+        return (
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}>
+                <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible' }}>{paths}</svg>
+                {labels}
+            </div>
+        );
+    };
+
+    const renderPolygonSetbacks = (ps) => {
+        const site = ps.site;
+        const normalizedData = ps.normalized;
+        const inputs = site.inputs;
+        const rawNormalized = normalizedData.points;
+        if (!rawNormalized) return null;
+
+        let { points: normalizedPoints, edgeMap } = discretizePolygon(rawNormalized, normalizedData.curves, 15);
+        // normalizedPoints = toWorldPts(normalizedPoints, ps.layout); // Removed to avoid double transform
+        const primaryIndices = new Set();
+        const secondaryIndices = new Set();
+        if (inputs.roads) {
+            inputs.roads.forEach(r => {
+                const indices = new Set();
+                if (r.edgeIndices) r.edgeIndices.forEach(i => indices.add(i));
+                if (r.edgeIndex !== undefined && r.edgeIndex !== "") indices.add(parseInt(r.edgeIndex));
+                if (r.type === 'primary') indices.forEach(i => primaryIndices.add(i));
+                else indices.forEach(i => secondaryIndices.add(i));
+            });
+        }
+        const initialFront = new Set();
+        if (frontageIndices && frontageIndices.size > 0) frontageIndices.forEach(i => initialFront.add(i));
+        else if (primaryIndices.size > 0) primaryIndices.forEach(i => initialFront.add(i));
+        else if (secondaryIndices.size > 0) secondaryIndices.forEach(i => initialFront.add(i));
+        const edgeCount = rawNormalized.length;
+        const frontIndices = new Set();
+        initialFront.forEach(i => { if (Number.isInteger(i) && i >= 0 && i < edgeCount) frontIndices.add(i); });
+        const combinedEdgeTypes = {};
+        Object.keys(edgeTypes || {}).forEach(k => {
+            const idx = parseInt(k);
+            if (!Number.isNaN(idx) && idx >= 0 && idx < edgeCount && !frontIndices.has(idx)) combinedEdgeTypes[idx] = edgeTypes[k];
+        });
+        secondaryIndices.forEach(idx => {
+            if (idx >= 0 && idx < edgeCount && !frontIndices.has(idx) && !combinedEdgeTypes[idx]) combinedEdgeTypes[idx] = 'side';
+        });
+        const hasExplicitBack = Object.values(combinedEdgeTypes).includes('back');
+        if ((!hasExplicitBack || sideM > 0) && normalizedPoints.length > 2 && frontIndices.size > 0) {
+            const centroid = getPolygonCentroid(normalizedPoints);
+            let frontNormal = { x: 0, y: 0 }; let count = 0;
+            normalizedPoints.forEach((p, i) => {
+                const orig = edgeMap[i];
+                if (frontIndices.has(orig)) {
+                    const p2 = normalizedPoints[(i + 1) % normalizedPoints.length];
+                    const n = getSegmentNormal(p, p2, centroid);
+                    frontNormal.x += n.x; frontNormal.y += n.y; count++;
+                }
+            });
+            if (count > 0) {
+                const len = Math.sqrt(frontNormal.x * frontNormal.x + frontNormal.y * frontNormal.y);
+                if (len > 0) {
+                    frontNormal.x /= len; frontNormal.y /= len;
+                    if (!hasExplicitBack) {
+                        normalizedPoints.forEach((p, i) => {
+                            const origIdx = edgeMap[i];
+                            if (!frontIndices.has(origIdx) && !combinedEdgeTypes[origIdx]) {
+                                const p2 = normalizedPoints[(i + 1) % normalizedPoints.length];
+                                const n = getSegmentNormal(p, p2, centroid);
+                                const dot = n.x * frontNormal.x + n.y * frontNormal.y;
+                                if (dot < -0.5) combinedEdgeTypes[origIdx] = 'back';
+                            }
+                        });
+                    }
+                    const hasExplicitSide = Object.values(combinedEdgeTypes).includes('side');
+                    if (!hasExplicitSide && sideM > 0) {
+                        const desiredSign = sideDir === 'left' ? 1 : -1;
+                        const candidates = [];
+                        normalizedPoints.forEach((p, i) => {
+                            const origIdx = edgeMap[i];
+                            if (frontIndices.has(origIdx) || combinedEdgeTypes[origIdx]) return;
+                            const p2 = normalizedPoints[(i + 1) % normalizedPoints.length];
+                            const n = getSegmentNormal(p, p2, centroid);
+                            const dot = n.x * frontNormal.x + n.y * frontNormal.y;
+                            const cross = frontNormal.x * n.y - frontNormal.y * n.x;
+                            candidates.push({ origIdx, dot, cross });
+                        });
+                        let selected = candidates.filter(c => Math.abs(c.dot) < 0.3 && desiredSign * c.cross > 0);
+                        if (selected.length === 0) {
+                            selected = candidates.filter(c => desiredSign * c.cross > 0).sort((a, b) => Math.abs(a.dot) - Math.abs(b.dot));
+                        }
+                        selected.forEach(c => { combinedEdgeTypes[c.origIdx] = 'side'; });
+                    }
+                }
+            }
+        }
+        const centroid = getPolygonCentroid(normalizedPoints);
+        const getDepthByType = (type) => {
+            if (type === 'front') return arcadeM > 0 ? arcadeM : frontM;
+            if (type === 'back') return backM;
+            if (type === 'side') return sideM;
+            return 0;
+        };
+        const getRegionType = (origIdx) => {
+            if (frontIndices.has(origIdx)) return 'front';
+            if (combinedEdgeTypes[origIdx] === 'back') return 'back';
+            if (combinedEdgeTypes[origIdx] === 'side') return 'side';
+            return null;
+        };
+        const buildOffsetPoints = (activeType) => {
+            const shiftedLines = [];
+            for (let i = 0; i < normalizedPoints.length; i++) {
+                const p1 = normalizedPoints[i];
+                const p2 = normalizedPoints[(i + 1) % normalizedPoints.length];
+                const origIdx = edgeMap[i];
+                const regionType = getRegionType(origIdx);
+                const depth = regionType === activeType ? getDepthByType(regionType) : 0;
+                const n = getSegmentNormal(p1, p2, centroid);
+                shiftedLines.push({
+                    p1: { x: p1.x + n.x * depth, y: p1.y + n.y * depth },
+                    p2: { x: p2.x + n.x * depth, y: p2.y + n.y * depth }
+                });
+            }
+            const newPoints = [];
+            for (let i = 0; i < shiftedLines.length; i++) {
+                const l1 = shiftedLines[i];
+                const l2 = shiftedLines[(i + 1) % shiftedLines.length];
+                const intersect = getLineIntersection(l1.p1, l1.p2, l2.p1, l2.p2);
+                newPoints.push(intersect || l1.p2);
+            }
+            return newPoints;
+        };
+        const buildRingPath = (innerPts) => {
+            if (!innerPts || innerPts.length < 3) return null;
+            let dPath = "";
+            normalizedPoints.forEach((p, i) => {
+                const x = p.x * scale + w / 2;
+                const y = p.y * scale + d / 2;
+                if (i === 0) dPath += `M ${x} ${y}`;
+                else dPath += ` L ${x} ${y}`;
+            });
+            dPath += " Z";
+            const inner = [...innerPts].reverse();
+            inner.forEach((p, i) => {
+                const x = p.x * scale + w / 2;
+                const y = p.y * scale + d / 2;
+                if (i === 0) dPath += ` M ${x} ${y}`;
+                else dPath += ` L ${x} ${y}`;
+            });
+            dPath += " Z";
+            return dPath;
+        };
+
+        const paths = [];
+        const hatchPalette = {
+            front: {
+                base: isDarkMode ? "rgba(244, 63, 94, 0.22)" : "rgba(244, 63, 94, 0.18)",
+                stripe: isDarkMode ? "rgba(244, 63, 94, 0.55)" : "rgba(244, 63, 94, 0.35)"
+            },
+            back: {
+                base: isDarkMode ? "rgba(16, 185, 129, 0.22)" : "rgba(16, 185, 129, 0.18)",
+                stripe: isDarkMode ? "rgba(16, 185, 129, 0.55)" : "rgba(16, 185, 129, 0.35)"
+            },
+            side: {
+                base: isDarkMode ? "rgba(59, 130, 246, 0.22)" : "rgba(59, 130, 246, 0.18)",
+                stripe: isDarkMode ? "rgba(59, 130, 246, 0.55)" : "rgba(59, 130, 246, 0.35)"
+            }
+        };
+        const hatchSize = Math.max(6, Math.min(16, scale * 0.8));
+        const regionTypes = ['front', 'back', 'side'];
+        const fillIds = { front: `setback-front-hatch-${ps.site.id}`, back: `setback-back-hatch-${ps.site.id}`, side: `setback-side-hatch-${ps.site.id}` };
+        
+        regionTypes.forEach(type => {
+            const depth = getDepthByType(type);
+            if (depth <= 0) return;
+            let hasEdge = false;
+            for (let i = 0; i < edgeMap.length; i++) {
+                if (getRegionType(edgeMap[i]) === type) { hasEdge = true; break; }
+            }
+            if (!hasEdge) return;
+            const innerPts = buildOffsetPoints(type);
+            const dPath = buildRingPath(innerPts);
+            if (!dPath) return;
+            
+            paths.push(
+                <React.Fragment key={`setback-area-${ps.site.id}-${type}`}>
+                    <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible', position: 'absolute', top: 0, left: 0 }}>
+                        <defs>
+                            <pattern id={fillIds[type]} x="0" y="0" width={hatchSize} height={hatchSize} patternUnits="userSpaceOnUse" patternContentUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                                <rect width={hatchSize} height={hatchSize} fill={hatchPalette[type].base} />
+                                <rect width={hatchSize / 2} height={hatchSize} fill={hatchPalette[type].stripe} />
+                            </pattern>
+                        </defs>
+                        <path d={dPath} fill={`url(#${fillIds[type]})`} stroke="none" fillRule="evenodd" />
+                    </svg>
+                </React.Fragment>
+            );
+        });
+
+        const labels = [];
+        const colorByType = { front: "#f43f5e", back: "#10b981", side: "#3b82f6" };
+        const labelByType = { front: arcadeM > 0 ? "騎樓" : "前院", back: "後院", side: "側院" };
+        const segmentsByOrig = new globalThis.Map();
+        for (let i = 0; i < edgeMap.length; i++) {
+            const orig = edgeMap[i];
+            if (!segmentsByOrig.has(orig)) segmentsByOrig.set(orig, []);
+            segmentsByOrig.get(orig).push(i);
+        }
+        segmentsByOrig.forEach((segments, origIdx) => {
+            const regionType = getRegionType(origIdx);
+            if (!regionType) return;
+            const depth = getDepthByType(regionType);
+            if (depth <= 0) return;
+            const midSeg = segments[Math.floor(segments.length / 2)];
+            const p1 = normalizedPoints[midSeg];
+            const p2 = normalizedPoints[(midSeg + 1) % normalizedPoints.length];
+            if (!p1 || !p2) return;
+            const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+            const n = getSegmentNormal(p1, p2, centroid);
+            labels.push({
+                x: mid.x + n.x * depth * 0.5,
+                y: mid.y + n.y * depth * 0.5,
+                text: labelByType[regionType],
+                color: colorByType[regionType],
+                key: `${regionType}-${origIdx}`
+            });
+        });
+
+        return (
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
+                {paths}
+                {labels.map(label => {
+                    const localX = label.x;
+                    const localY = label.y;
+                    const wx = ps.layout.x + localX * Math.cos(ps.layout.rotation) - localY * Math.sin(ps.layout.rotation);
+                    const wy = ps.layout.y + localX * Math.sin(ps.layout.rotation) + localY * Math.cos(ps.layout.rotation);
+                    const pos = projectWorldToScreen(wx, wy, 0);
+                    overlayLabelsBuffer.push({
+                        id: `setback-${ps.site.id}-${label.key}`,
+                        text: label.text,
+                        origX: pos.x, origY: pos.y, x: pos.x, y: pos.y,
+                        width: 40, height: 20,
+                        style: { color: label.color, textShadow: '1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff', fontWeight: '900', fontSize: '10px' }
+                    });
+                    return null;
+                })}
+            </div>
+        );
+    };
+
+    const renderReviewSurfaces = (ps) => {
+        const normalizedData = ps.normalized;
+        const res = ps.res;
+        const inputs = ps.site.inputs;
+
+        const paths = [];
+        const offX = w / 2;
+        const offY = d / 2;
+        let workingPoints = [];
+        let workingEdgeIndices = [];
+        if (normalizedData.points && normalizedData.points.length > 2) {
+            const discretized = discretizePolygon(normalizedData.points, normalizedData.curves, 20);
+            workingPoints = discretized.points;
+            workingEdgeIndices = discretized.edgeMap;
+        } else {
+            const hw = baseWidthM / 2; const hd = baseDepthM / 2;
+            workingPoints = [{ x: -hw, y: -hd }, { x: hw, y: -hd }, { x: hw, y: hd }, { x: -hw, y: hd }];
+            workingEdgeIndices = [0, 1, 2, 3];
+        }
+        if (!workingPoints || workingPoints.length < 3) return null;
+        // workingPoints = toWorldPts(workingPoints, ps.layout); // Removed to avoid double transform
+        const centroid = getPolygonCentroid(workingPoints);
+        const primaryIndices = new Set();
+        const secondaryIndices = new Set();
+        if (inputs.roads) {
+            inputs.roads.forEach(r => {
+                const indices = new Set();
+                if (r.edgeIndices) r.edgeIndices.forEach(i => indices.add(i));
+                if (r.edgeIndex !== undefined && r.edgeIndex !== "") indices.add(parseInt(r.edgeIndex));
+                if (r.type === 'primary') indices.forEach(i => primaryIndices.add(i));
+                else indices.forEach(i => secondaryIndices.add(i));
+            });
+        }
+        const frontIndices = new Set();
+        if (frontageIndices && frontageIndices.size > 0) frontageIndices.forEach(i => frontIndices.add(i));
+        else if (primaryIndices.size > 0) primaryIndices.forEach(i => frontIndices.add(i));
+        else if (secondaryIndices.size > 0) frontageIndices.forEach(i => frontIndices.add(i));
+        const combinedEdgeTypes = { ...edgeTypes };
+        secondaryIndices.forEach(idx => {
+            if (!frontIndices.has(idx) && !combinedEdgeTypes[idx]) combinedEdgeTypes[idx] = 'side';
+        });
+        const hasExplicitBack = Object.values(combinedEdgeTypes).includes('back');
+        const autoBackIndices = new Set();
+        if (!hasExplicitBack && workingPoints.length > 2 && frontIndices.size > 0) {
+            let frontNormal = { x: 0, y: 0 };
+            let count = 0;
+            workingPoints.forEach((p, i) => {
+                const orig = workingEdgeIndices[i];
+                if (frontIndices.has(orig)) {
+                    const p2 = workingPoints[(i + 1) % workingPoints.length];
+                    const n = getSegmentNormal(p, p2, centroid);
+                    frontNormal.x += n.x; frontNormal.y += n.y; count++;
+                }
+            });
+            if (count > 0) {
+                const len = Math.sqrt(frontNormal.x * frontNormal.x + frontNormal.y * frontNormal.y);
+                if (len > 0) {
+                    frontNormal.x /= len; frontNormal.y /= len;
+                    workingPoints.forEach((p, i) => {
+                        const p2 = workingPoints[(i + 1) % workingPoints.length];
+                        const n = getSegmentNormal(p, p2, centroid);
+                        const dot = n.x * frontNormal.x + n.y * frontNormal.y;
+                        if (dot < -0.5) autoBackIndices.add(workingEdgeIndices[i]);
+                    });
+                }
+            }
+        }
+        const buildRingPath = (outer, inner) => {
+            if (!outer || !inner || outer.length < 2 || inner.length < 2) return null;
+            let dPath = "";
+            outer.forEach((p, i) => {
+                const x = p.x * scale + offX;
+                const y = p.y * scale + offY;
+                if (i === 0) dPath += `M ${x} ${y}`; else dPath += ` L ${x} ${y}`;
+            });
+            const rev = [...inner].reverse();
+            rev.forEach((p, i) => {
+                const x = p.x * scale + offX;
+                const y = p.y * scale + offY;
+                if (i === 0) dPath += ` M ${x} ${y}`; else dPath += ` L ${x} ${y}`;
+            });
+            dPath += " Z";
+            return dPath;
+        };
+        const groupsFrontOuter = [];
+        const groupsFrontInner = [];
+        const groupsBackOuter = [];
+        const groupsBackInner = [];
+        let curFrontOuter = []; let curFrontInner = [];
+        let curBackOuter = []; let curBackInner = [];
+        const getPrimaryRoadInfo = () => {
+            let road = inputs.roads.find(r => r.type === 'primary');
+            if (!road) return { widthM: 6 };
+            return { widthM: parseFloat(road.width) };
+        };
+        const { widthM: primRoadW_M } = getPrimaryRoadInfo();
+        const minBYRatio = parseFloat(inputs.minBackyardDepthRatio || 0);
+        const showHeightFront = showHeightRatio && minBYRatio <= 0;
+        const fD = parseFloat(inputs.frontYardDepth || 0);
+        const vizHeight = 30;
+        for (let i = 0; i < workingPoints.length; i++) {
+            const p1 = workingPoints[i];
+            const p2 = workingPoints[(i + 1) % workingPoints.length];
+            const originalIdx = workingEdgeIndices[i];
+            const n = getSegmentNormal(p1, p2, centroid);
+            if (showHeightFront && frontIndices.has(originalIdx)) {
+                const p1Out = { x: p1.x - n.x * primRoadW_M, y: p1.y - n.y * primRoadW_M };
+                const p2Out = { x: p2.x - n.x * primRoadW_M, y: p2.y - n.y * primRoadW_M };
+                const p1In = { x: p1.x + n.x * fD, y: p1.y + n.y * fD };
+                const p2In = { x: p2.x + n.x * fD, y: p2.y + n.y * fD };
+                if (curFrontOuter.length === 0) {
+                    curFrontOuter.push(p1Out);
+                    curFrontInner.push(p1In);
+                }
+                curFrontOuter.push(p2Out);
+                curFrontInner.push(p2In);
+            } else {
+                if (curFrontOuter.length > 0) { groupsFrontOuter.push(curFrontOuter); groupsFrontInner.push(curFrontInner); curFrontOuter = []; curFrontInner = []; }
+            }
+            const isBack = combinedEdgeTypes[originalIdx] === 'back' || autoBackIndices.has(originalIdx);
+            if (minBYRatio > 0 && isBack) {
+                const reqDist = vizHeight / minBYRatio;
+                const p1Out = { x: p1.x, y: p1.y };
+                const p2Out = { x: p2.x, y: p2.y };
+                const p1In = { x: p1.x + n.x * reqDist, y: p1.y + n.y * reqDist };
+                const p2In = { x: p2.x + n.x * reqDist, y: p2.y + n.y * reqDist };
+                if (curBackOuter.length === 0) {
+                    curBackOuter.push(p1Out);
+                    curBackInner.push(p1In);
+                }
+                curBackOuter.push(p2Out);
+                curBackInner.push(p2In);
+            } else {
+                if (curBackOuter.length > 0) { groupsBackOuter.push(curBackOuter); groupsBackInner.push(curBackInner); curBackOuter = []; curBackInner = []; }
+            }
+        }
+        if (curFrontOuter.length > 0) { groupsFrontOuter.push(curFrontOuter); groupsFrontInner.push(curFrontInner); }
+        if (curBackOuter.length > 0) { groupsBackOuter.push(curBackOuter); groupsBackInner.push(curBackInner); }
+        const heightColor = isDarkMode ? "rgba(244,63,94,0.20)" : "rgba(244,63,94,0.18)";
+        const backColor = isDarkMode ? "rgba(34,197,94,0.20)" : "rgba(34,197,94,0.18)";
+        let frontPathD = "";
+        let backPathD = "";
+        if (showCheckLines && showHeightFront) {
+            for (let gi = 0; gi < groupsFrontOuter.length; gi++) {
+                const dEl = buildRingPath(groupsFrontOuter[gi], groupsFrontInner[gi]);
+                if (dEl) frontPathD += `${dEl} `;
+            }
+        }
+        if (showCheckLines && (showHeightRatio || showBackyard)) {
+            for (let gi = 0; gi < groupsBackOuter.length; gi++) {
+                const dEl = buildRingPath(groupsBackOuter[gi], groupsBackInner[gi]);
+                if (dEl) backPathD += `${dEl} `;
+            }
+        }
+        if (frontPathD) paths.push(<path key="front-review-path" d={frontPathD.trim()} fill={heightColor} stroke="none" fillRule="evenodd" />);
+        if (backPathD) paths.push(<path key="back-review-path" d={backPathD.trim()} fill={backColor} stroke="none" fillRule="evenodd" />);
+        if (paths.length === 0) return null;
+        return (
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 9 }}>
+                <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible' }}>
+                    {paths}
+                </svg>
+            </div>
+        );
+    };
+
+    const calculateCheckLines = () => {
+        const lines = [];
+        const offX = w / 2;
+        const offY = d / 2;
+
+        // Helper to find primary road info (修正多基地共用指北針/道路邏輯)
+        const getPrimaryRoadInfo = () => {
+            let road = (inputs.roads && inputs.roads.find(r => r.type === 'primary')) || 
+                       (sites && sites[0] && sites[0].inputs && sites[0].inputs.roads && sites[0].inputs.roads.find(r => r.type === 'primary'));
+            if (!road) return { widthPx: 6 * scale, widthM: 6, isDefault: true, roadObj: null };
+            return { widthPx: parseFloat(road.width) * scale, widthM: parseFloat(road.width), isDefault: false, roadObj: road };
+        };
+
+        const { widthPx: primRoadW_Px, widthM: primRoadW_M, roadObj: primRoad } = getPrimaryRoadInfo();
+
+        // Use discretized points to handle curves correctly
+        // We need to map edges back to original indices to check frontage/back types
+        let workingPoints = [];
+        let workingEdgeIndices = [];
+
+        if (normalizedData.points && normalizedData.points.length > 2) {
+            const discretized = discretizePolygon(normalizedData.points, normalizedData.curves, 20);
+            workingPoints = discretized.points;
+            workingEdgeIndices = discretized.edgeMap;
+        } else {
+            const hw = baseWidthM / 2; const hd = baseDepthM / 2;
+            workingPoints = [{ x: -hw, y: -hd }, { x: hw, y: -hd }, { x: hw, y: hd }, { x: -hw, y: hd }];
+            workingEdgeIndices = [0, 1, 2, 3];
+        }
+
+        if (!workingPoints || workingPoints.length < 3) return [];
+        const layoutA = siteLayouts.get(sites[0].id) || { x: sites[0].position?.x || 0, y: sites[0].position?.y || 0, rotation: 0 };
+        workingPoints = toWorldPts(workingPoints, layoutA);
+        const floorHeight1F = parseFloat(inputs.floorHeight1F) || 4.2;
+        const floorHeightOther = parseFloat(inputs.floorHeightOther) || 3.6;
+        const heightAt50 = (() => {
+            const target = 50;
+            if (target <= 0) return 0;
+            if (target <= floorHeight1F) return Math.min(target, Math.max(0, massingLayers.totalHeight));
+            const remaining = target - floorHeight1F;
+            const floorsNeeded = remaining / Math.max(0.01, floorHeightOther);
+            return Math.min(Math.max(0, massingLayers.totalHeight), floorHeight1F + floorsNeeded * floorHeightOther);
+        })();
+        const getSetbacksAtHeight = (checkZ) => {
+            let currentFrontM = frontM;
+            let effectiveBackM = backM;
+            let effectiveSideM = sideM;
+            let baseFrontM = frontM;
+            let baseBackM = backM;
+            if (isConstraintMode || showCheckLines) {
+                if (showHeightRatio && byRatio <= 0) {
+                    const reqFrontHR = (checkZ / 3.6) - roadW_M;
+                    if (reqFrontHR > currentFrontM) currentFrontM = reqFrontHR;
+                }
+                if (showWeiLao) {
+                    const reqFrontWL = (checkZ / 5.0) - (roadW_M / 2);
+                    if (reqFrontWL > currentFrontM) currentFrontM = reqFrontWL;
+                }
+            }
+            if ((isConstraintMode || showCheckLines) && byRatio > 0) {
+                const reqBack = checkZ / byRatio;
+                if (effectiveBackM < reqBack) effectiveBackM = reqBack;
+            }
+            const maxBaseBackM = Math.max(0, baseDepthM - baseFrontM);
+            if (baseBackM > maxBaseBackM) baseBackM = maxBaseBackM;
+            const maxFrontM = Math.max(0, baseDepthM - baseBackM);
+            if (currentFrontM > maxFrontM) currentFrontM = maxFrontM;
+            const maxBackM = Math.max(0, baseDepthM - currentFrontM);
+            if (effectiveBackM > maxBackM) effectiveBackM = maxBackM;
+            return { front: currentFrontM, back: effectiveBackM, side: effectiveSideM };
+        };
+        const getSetbackForEdge = (origIdx, setbackSet, combinedEdgeTypesRef, frontIdxSet, autoBackIdxSet) => {
+            if (frontIdxSet.has(origIdx)) return setbackSet.front;
+            if (combinedEdgeTypesRef[origIdx] === 'back' || autoBackIdxSet.has(origIdx)) return setbackSet.back;
+            if (combinedEdgeTypesRef[origIdx] === 'side') return setbackSet.side;
+            return 0;
+        };
+
+        // --- Consistent Edge Logic Start ---
+        const primaryIndices = new Set();
+        const secondaryIndices = new Set();
+
+        if (inputs.roads) {
+            inputs.roads.forEach(r => {
+                const indices = new Set();
+                if (r.edgeIndices) r.edgeIndices.forEach(i => indices.add(i));
+                if (r.edgeIndex !== undefined && r.edgeIndex !== "") indices.add(parseInt(r.edgeIndex));
+
+                if (r.type === 'primary') {
+                    indices.forEach(i => primaryIndices.add(i));
+                } else {
+                    indices.forEach(i => secondaryIndices.add(i));
+                }
+            });
+        }
+
+        const frontIndices = new Set();
+        if (frontageIndices && frontageIndices.size > 0) {
+            frontageIndices.forEach(i => frontIndices.add(i));
+        } else {
+            primaryIndices.forEach(i => frontIndices.add(i));
+            if (primaryIndices.size === 0 && secondaryIndices.size > 0) {
+                secondaryIndices.forEach(i => frontIndices.add(i));
+            }
+        }
+
+        // Prepare combined edge types (Secondary -> Side)
+        const combinedEdgeTypes = { ...edgeTypes };
+        secondaryIndices.forEach(idx => {
+            if (!frontIndices.has(idx) && !combinedEdgeTypes[idx]) {
+                combinedEdgeTypes[idx] = 'side';
+            }
+        });
+        // --- Consistent Edge Logic End ---
+
+        const centroid = getPolygonCentroid(workingPoints);
+
+        // Iterate through discretized segments
+        // Group segments by Original Index to consolidate labels
+        const linesByEdge = {};
+
+        // --- Auto-Detect Back Logic ---
+        // If no edge is explicitly marked as 'back', find edges roughly opposite to the main road
+        const hasExplicitBack = Object.values(combinedEdgeTypes).includes('back');
+        const autoBackIndices = new Set();
+
+        if (!hasExplicitBack && primRoad) {
+            let frontNormal = { x: 0, y: 0 };
+            let count = 0;
+
+            workingPoints.forEach((p, i) => {
+                const orig = workingEdgeIndices[i];
+                if (frontIndices.has(orig)) {
+                    const p2 = workingPoints[(i + 1) % workingPoints.length];
+                    const n = getSegmentNormal(p, p2, centroid);
+                    frontNormal.x += n.x;
+                    frontNormal.y += n.y;
+                    count++;
+                }
+            });
+
+            if (count > 0) {
+                frontNormal.x /= count; frontNormal.y /= count;
+                const len = Math.sqrt(frontNormal.x * frontNormal.x + frontNormal.y * frontNormal.y);
+                frontNormal.x /= len; frontNormal.y /= len;
+
+                workingPoints.forEach((p, i) => {
+                    const p2 = workingPoints[(i + 1) % workingPoints.length];
+                    const n = getSegmentNormal(p, p2, centroid);
+                    const dot = n.x * frontNormal.x + n.y * frontNormal.y;
+                    if (dot < -0.5) { // Roughly opposite (> 120 degrees)
+                        autoBackIndices.add(workingEdgeIndices[i]);
+                    }
+                });
+            }
+        }
+        // -----------------------------
+
+        for (let i = 0; i < workingPoints.length; i++) {
+            const p1 = workingPoints[i];
+            const p2 = workingPoints[(i + 1) % workingPoints.length];
+            const originalIdx = workingEdgeIndices[i];
+
+            const normal = getSegmentNormal(p1, p2, centroid);
+            const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+
+            if (!linesByEdge[originalIdx]) linesByEdge[originalIdx] = [];
+            const minBYRatio = parseFloat(inputs.minBackyardDepthRatio || 0);
+            const useFrontHeightRatio = showHeightRatio && minBYRatio <= 0;
+            const showFalling = fallingCurveRequired && showFallingCurve && showCheckLines && fallingCurveD > 0;
+            const setbackAt50 = showFalling ? getSetbacksAtHeight(heightAt50) : null;
+
+            // 1. WeiLao (Frontage)
+            if (frontIndices.has(originalIdx)) {
+                const fD = parseFloat(inputs.frontYardDepth || 0);
+
+                const p_out_M = { x: mid.x - normal.x * primRoadW_M, y: mid.y - normal.y * primRoadW_M };
+                const p_center_M = { x: mid.x - normal.x * (primRoadW_M / 2), y: mid.y - normal.y * (primRoadW_M / 2) };
+                const p_setback_M = { x: mid.x + normal.x * fD, y: mid.y + normal.y * fD };
+
+                if (showCheckLines && useFrontHeightRatio) {
+                    const hRatioH = 3.6 * (primRoadW_M + fD) * scale;
+                    linesByEdge[originalIdx].push({
+                        id: `height-front-${i}`,
+                        type: 'height',
+                        start: { x: offX + p_out_M.x * scale, y: offY + p_out_M.y * scale, z: 0 },
+                        end: { x: offX + p_setback_M.x * scale, y: offY + p_setback_M.y * scale, z: hRatioH },
+                        label: "高度比",
+                        color: "#f43f5e",
+                        dashed: false,
+                        thick: true
+                    });
+                }
+
+                if (showCheckLines && showWeiLao) {
+                    const wlH = 5 * (0.5 * primRoadW_M + fD) * scale;
+                    linesByEdge[originalIdx].push({
+                        id: `weilao-${i}`,
+                        type: 'weilao',
+                        start: { x: offX + p_center_M.x * scale, y: offY + p_center_M.y * scale, z: 0 },
+                        end: { x: offX + p_setback_M.x * scale, y: offY + p_setback_M.y * scale, z: wlH },
+                        label: "危老檢討",
+                        color: isDarkMode ? "#60a5fa" : "#3b82f6",
+                        dashed: true,
+                        thick: true
+                    });
+                }
+            }
+
+            // 2. Backyard Depth Ratio (Back)
+            const isBack = combinedEdgeTypes[originalIdx] === 'back' || autoBackIndices.has(originalIdx);
+
+            if (minBYRatio > 0 && showCheckLines && isBack) {
+                const backM = parseFloat(inputs.backYardDepth || 0);
+                const startM = { x: mid.x + normal.x * backM, y: mid.y + normal.y * backM };
+                const vizHeight = 30;
+                const reqDist = vizHeight / minBYRatio;
+
+                const p_envelope_M = { x: startM.x + normal.x * reqDist, y: startM.y + normal.y * reqDist };
+
+                if (showHeightRatio) {
+                    linesByEdge[originalIdx].push({
+                        id: `height-back-${i}`,
+                        type: 'height',
+                        start: { x: offX + startM.x * scale, y: offY + startM.y * scale, z: 0 },
+                        end: { x: offX + p_envelope_M.x * scale, y: offY + p_envelope_M.y * scale, z: vizHeight * scale },
+                        label: "高度比",
+                        color: "#22c55e",
+                        dashed: true,
+                        thick: true
+                    });
+                }
+                if (showBackyard) {
+                    linesByEdge[originalIdx].push({
+                        id: `backyard-${i}`,
+                        type: 'backyard',
+                        start: { x: offX + startM.x * scale, y: offY + startM.y * scale, z: 0 },
+                        end: { x: offX + p_envelope_M.x * scale, y: offY + p_envelope_M.y * scale, z: vizHeight * scale },
+                        label: `後院檢討 (1:${minBYRatio})`,
+                        color: "#22c55e",
+                        dashed: true,
+                        thick: true
+                    });
+                }
+            }
+
+            if (showFalling) {
+                const fallTop = Math.max(0, massingLayers.totalHeight);
+                const fallBottom = Math.max(0, heightAt50);
+                if (fallTop > fallBottom) {
+                    const startSetback = getSetbackForEdge(originalIdx, setbackAt50, combinedEdgeTypes, frontIndices, autoBackIndices);
+                    const endSetback = Math.max(fallingCurveD, startSetback);
+                    const p_start_M = { x: mid.x + normal.x * startSetback, y: mid.y + normal.y * startSetback };
+                    const p_end_M = { x: mid.x + normal.x * endSetback, y: mid.y + normal.y * endSetback };
+                    linesByEdge[originalIdx].push({
+                        id: `falling-${i}`,
+                        type: 'falling',
+                        start: { x: offX + p_start_M.x * scale, y: offY + p_start_M.y * scale, z: fallBottom * scale },
+                        end: { x: offX + p_end_M.x * scale, y: offY + p_end_M.y * scale, z: fallTop * scale },
+                        label: "50m",
+                        color: "#f59e0b",
+                        dashed: true,
+                        thick: true
+                    });
+                }
+            }
+        }
+
+        Object.values(linesByEdge).forEach(groupLines => {
+            const byType = {};
+            groupLines.forEach(l => {
+                if (!byType[l.type]) byType[l.type] = [];
+                byType[l.type].push(l);
+            });
+
+            Object.values(byType).forEach(subGroup => {
+                const midIdx = Math.floor(subGroup.length / 2);
+                subGroup.forEach((l, idx) => {
+                    if (idx !== midIdx) l.label = null;
+                    lines.push(l);
+                });
+            });
+        });
+
+        return lines;
+    };
+
+
+
+    const overlayLabelsBuffer = [];
+    const landscapeStyle = isLandscapeMode ? { position: 'fixed', top: 0, left: '100vw', width: '100dvh', height: '100vw', transform: 'rotate(90deg)', transformOrigin: 'top left', zIndex: 9999, margin: 0, borderRadius: 0, touchAction: 'none', backgroundColor: isDarkMode ? '#020617' : '#cbe4fc' } : { backgroundColor: isDarkMode ? '#020617' : '#cbe4fc', touchAction: 'none' };
+    const controlBarClass = isLandscapeMode ? "absolute top-6 right-6 z-30 flex flex-col items-end gap-2" : "absolute top-4 right-4 z-30 flex flex-col items-end gap-2 sm:flex-row sm:items-center";
+    const viewTransition = isDragging ? 'none' : 'transform 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)';
+
+    return (
+        <div className="theme-panel rounded-xl p-0 mb-6 shadow-md overflow-hidden relative min-h-[350px] md:min-h-[600px] flex flex-col border theme-border font-['GenYoGothic',_sans-serif] md:sticky md:top-0 md:z-40">
+            {showUnusedPrompt && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center">
+                    <div className="absolute inset-0 bg-black/30" onClick={() => setShowUnusedPrompt(false)}></div>
+                    <div className="relative bg-white rounded-lg shadow-xl border border-stone-200 w-72 p-4">
+                        <h3 className="font-bold text-sm mb-2 text-stone-700">未用容積</h3>
+                        {randomSlabEnabled ? (
+                            <>
+                                <div className="text-xs text-stone-600 mb-3">還有 {formatNum(toPing(unusedArea))} 坪未使用，是否自動增加樓層？</div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => {
+                                        setShowUnusedPrompt(false);
+                                        const avgArea = massingLayers.currentTotalUsed / Math.max(1, massingLayers.totalFloors);
+                                        const addFloors = Math.max(1, Math.round(unusedArea / avgArea));
+                                        const nextFloors = massingLayers.totalFloors + addFloors;
+                                        setManualFloorsOverride(nextFloors);
+                                        onUpdateInputs('floorsAbove', nextFloors);
+                                    }} className="flex-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold shadow-sm hover:bg-emerald-700">是</button>
+                                    <button onClick={() => setShowUnusedPrompt(false)} className="flex-1 px-3 py-1.5 rounded-lg bg-white border border-stone-300 text-stone-600 text-xs font-bold hover:bg-stone-50">否</button>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div className="text-xs text-stone-600 mb-3">還有 {formatNum(toPing(unusedArea))} 坪未使用，是否平均分配至所有地上樓層？</div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => { setShowUnusedPrompt(false); handleAutoDistributeUnusedArea(); }} className="flex-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold shadow-sm hover:bg-emerald-700">是</button>
+                                    <button onClick={() => setShowUnusedPrompt(false)} className="flex-1 px-3 py-1.5 rounded-lg bg-white border border-stone-300 text-stone-600 text-xs font-bold hover:bg-stone-50">否</button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            )}
+            <div className="flex-1 w-full h-full relative flex flex-col" style={{}}>
+                <div ref={viewportRef} className={`flex-1 relative flex flex-col items-center justify-center perspective-1000 min-h-[350px] md:min-h-[600px] w-full overflow-hidden transition-colors duration-500 touch-none ${isDragging ? 'cursor-grabbing' : (placementMode === 'independent' ? 'cursor-crosshair' : 'cursor-grab')}`} style={{ ...landscapeStyle, background: isDarkMode ? 'linear-gradient(to bottom, #1e293b 0%, #1e293b 45%, #0f172a 45%, #0f172a 100%)' : 'linear-gradient(to bottom, #e0f2fe 0%, #e0f2fe 45%, #f5f5f4 45%, #f5f5f4 100%)' }} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleMouseUp} onClick={(e) => {
+                    if (placementMode === 'independent' && onConfirmPlacement) {
+                        onConfirmPlacement();
+                    } else {
+                        handleBgClick(e);
+                    }
+                }}>
+                    <div className="absolute top-4 left-4 z-40 flex flex-col gap-2">
+                        <div className="flex theme-panel-glass backdrop-blur rounded-lg border theme-border shadow-sm p-1 gap-1">
+                            <button onClick={() => setViewMode('3d')} className={`flex items-center gap-1 px-3 py-1.5 rounded text-xs font-bold transition-colors ${viewMode === '3d' ? 'theme-btn-active' : 'theme-text-muted hover:opacity-80'}`}><Box size={14} /> 3D 模擬</button>
+                            <button onClick={() => setViewMode('2d')} className={`flex items-center gap-1 px-3 py-1.5 rounded text-xs font-bold transition-colors ${viewMode === '2d' ? 'theme-btn-active' : 'theme-text-muted hover:opacity-80'}`}><LayoutTemplate size={14} /> 平面分析</button>
+                        </div>
+                    </div>
+                    <div className={controlBarClass}>
+                        <div className={`theme-panel-glass p-1.5 rounded-full border shadow-lg flex flex-row items-center gap-2 backdrop-blur-md transition-colors duration-300`}>
+                            <button onClick={() => setIsDarkMode(prev => !prev)} className={`p-2 rounded-full transition-all theme-text hover:text-[var(--text-accent)] hover:opacity-80`} title={isDarkMode ? "切換為亮色模式" : "切換為夜間模式"}>{isDarkMode ? <Sun size={18} /> : <Moon size={18} />}</button>
+                            
+                        </div>
+                        {isMobile && (
+                            <button onClick={() => setIsSummaryOpen(prev => !prev)} className="px-3 py-2 rounded-full theme-panel-glass border theme-border theme-text text-xs font-bold shadow-md backdrop-blur">專業模式</button>
+                        )}
+                    </div>
+                    {isConstraintMode && viewMode === '3d' && (<div className="absolute bottom-24 right-6 z-20 pointer-events-none"><div className="bg-emerald-600/90 text-white px-3 py-1.5 rounded-full shadow-lg text-sm font-bold flex items-center gap-2 backdrop-blur border border-emerald-400 animate-pulse"><CheckCircle2 size={16} fill="white" className="text-emerald-700" />鎖定編輯 (法規檢討中)</div></div>)}
+                    {viewMode === '2d' ? (
+                        <PlanAnalysis2D layers={floorLayers} baseWidthM={baseWidthM} baseDepthM={baseDepthM} onSelectFloor={(id) => { if (id === 'base' || id === 'excavation' || /^B\d+$/.test(id)) { setSelectedFloor({ id }); } else if (id) { const l = floorLayers.find(f => f.id === id); if (l) handleLayerClick({ stopPropagation: () => { } }, l); } }} selectedFloorId={selectedFloor?.id} isDarkMode={isDarkMode} onUpdateSetting={updateFloorSetting} floorSettings={floorSettings} inputs={inputs} scale3d={scale} basements={basements} onToggleBasement={toggleBasement} activeBasementArea={activeBasementArea} totalAllowedArea={parseFloat(res.totalCFA) || 0} showCheckLines={showCheckLines} volumeLimit={volumeLimit} parkingOn1F={parkingOn1F} onToggleParkingLocation={toggleParkingLocation} onClose={() => { if (selectedFloor) { setSelectedFloor(null); } else { setViewMode('3d'); } }} basePoints={basePoints} baseCurves={baseCurves} excavationPoints={excavationPoints} excavationCurves={excavationCurves} onAddRoad={onUpdateRoads} frontageIndices={frontageIndices} onUpdateFrontageIndices={setFrontageIndices} onAddFloor={handleAddFloor} onRemoveFloor={handleRemoveFloor} edgeTypes={edgeTypes} onUpdateEdgeTypes={updateEdgeTypes} view={view2D} onUpdateView={setView2D} onUpdateInputs={onUpdateInputs} onUpdateRoads={onUpdateRoads} onEditEnd={handleBaseEditEnd} unitSettings={unitSettings} onUpdateUnitSettings={setUnitSettings} onApplyAll={handleApplyAllFloors} floorsAboveValue={floorsAboveValue} onUpdateFloorsAbove={handleSetFloorsAbove} />
+                    ) : (
+                        <>
+                            {!isConstraintMode && <FloorInfoCard data={selectedFloor} isDarkMode={isDarkMode} onReset={resetFloor} isConstraintMode={isConstraintMode} inputs={inputs} />}
+
+                            <div ref={compassRef} onPointerDown={handleCompassPointerDown} onPointerMove={handleCompassPointerMove} onPointerUp={handleCompassPointerUp} onPointerLeave={handleCompassPointerUp} className={`absolute bottom-8 right-6 z-20 pointer-events-auto transition-opacity duration-300 ${isDragging ? 'opacity-40' : 'opacity-100'}`}>
+                                <ArtisticCompass className="w-16 h-16" rotation={rotationZ - (inputs.northAngle || 0)} isDarkMode={isDarkMode} />
+                            </div>
+
+                            {totalAreaViolation && <div className="absolute top-8 left-1/2 transform -translate-x-1/2 z-20 pointer-events-none animate-pulse"><div className="bg-red-500/90 text-white px-3 py-1.5 rounded-full shadow-lg text-sm font-bold flex items-center gap-2 backdrop-blur"><AlertTriangle size={16} fill="white" className="text-red-500" />總容積超限! (量體 {formatNum(toPing(massingLayers.currentTotalUsed))} &gt; 法定 {formatNum(toPing(volumeLimit))}坪)</div></div>}
+                            {isConstraintMode && unusedArea > 0.1 && (
+                                <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-20 pointer-events-none">
+                                    <div className="bg-emerald-600/90 text-white px-3 py-1.5 rounded-full shadow-lg text-sm font-bold flex items-center gap-2 backdrop-blur border border-emerald-400">
+                                        <CheckCircle2 size={16} fill="white" className="text-emerald-700" />
+                                        剩餘容積: {formatNum(toPing(unusedArea))} 坪 (可再增加樓層)
+                                    </div>
+                                </div>
+                            )}
+                            <div className="relative w-full h-full flex items-center justify-center pointer-events-none" style={{ perspective: '2500px', transformStyle: 'preserve-3d' }}>
+                                <div style={{ transform: `translate3d(${panOffset.x + focusOffset.x}px, ${panOffset.y + focusOffset.y}px, ${focusOffset.z}px) scale(${zoom}) rotateX(${viewAngleX}deg) rotateZ(${rotationZ}deg)`, transformStyle: 'preserve-3d', transition: viewTransition, willChange: 'transform', backfaceVisibility: 'hidden' }}>
+                                    <div style={{ position: 'absolute', top: '50%', left: '50%', marginLeft: -w/2, marginTop: -d/2, width: `${w}px`, height: `${d}px`, backgroundColor: 'transparent', transformStyle: 'preserve-3d', transition: 'background-color 0.5s', pointerEvents: 'auto' }} onMouseDown={handleMouseDown} onTouchStart={handleTouchStart}>
+                                        <div style={{ position: 'absolute', top: '50%', left: '50%', width: '40000px', height: '40000px', marginLeft: '-20000px', marginTop: '-20000px', backgroundColor: isDarkMode ? '#1e293b' : '#e4e4e7', transform: 'translateZ(-0.5px)', pointerEvents: 'auto' }} onMouseDown={handleMouseDown} onTouchStart={handleTouchStart}></div>
+                                    </div>
+
+                                    <div style={{ position: 'absolute', top: 0, left: 0, transformStyle: 'preserve-3d' }}>
+                                        {processedSites.map(ps => {
+                                            const layout = ps.layout;
+                                            const isPrimary = ps.site.id === activeSiteId;
+                                            const totalH = ps.massing.totalHeight || 0;
+                                            const origPos = projectWorldToScreen(ps.layout.x, ps.layout.y, totalH);
+                                            overlayLabelsBuffer.push({
+                                                id: `site-${ps.site.id}`,
+                                                siteId: ps.site.id,
+                                                text: ps.site.name,
+                                                origX: origPos.x, origY: origPos.y, x: origPos.x, y: origPos.y,
+                                                width: 85, height: 26,
+                                                className: `px-3 py-1.5 rounded shadow-lg backdrop-blur text-sm font-black border-2 border-black flex items-center gap-1.5 transition-colors ${hoveredSiteId === ps.site.id ? 'bg-[var(--text-accent)] text-white' : (ps.site.id === activeSiteId ? 'bg-black text-white' : 'theme-panel-glass theme-text')}`,
+                                                isSite: true
+                                            });
+                                            return (
+                                                <div 
+                                                    key={ps.site.id} 
+                                                    onMouseEnter={() => setHoveredSiteId(ps.site.id)}
+                                                    onMouseLeave={() => setHoveredSiteId(null)}
+                                                    style={{
+                                                        position: 'absolute',
+                                                        top: '50%', left: '50%',
+                                                        width: w, height: d,
+                                                        marginLeft: -w/2, marginTop: -d/2,
+                                                        transform: `translate3d(${(layout.x - projectBounds.center.x) * scale}px, ${(layout.y - projectBounds.center.y) * scale}px, 0) rotateZ(${layout.rotation}rad)`,
+                                                        transformStyle: 'preserve-3d'
+                                                    }}
+                                                >
+                                                    {ps.normalized.points && ps.normalized.points.length > 0 && (
+                                                        <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible', position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 1 }}>
+                                                            <path
+                                                                d={generateSvgPath(ps.normalized.points, ps.normalized.curves, scale, w / 2, d / 2)}
+                                                                fill={isDarkMode ? 'rgba(30, 41, 59, 0.15)' : 'rgba(255, 255, 255, 0.03)'}
+                                                                stroke={isPrimary ? colors.stroke : (isDarkMode ? "rgba(148, 163, 184, 0.4)" : "rgba(100, 116, 139, 0.5)")}
+                                                                 strokeWidth={isPrimary ? 2 : 1}
+                                                                style={{ filter: isDarkMode ? 'drop-shadow(0 0 10px rgba(0,0,0,0.5))' : 'drop-shadow(0 0 10px rgba(0,0,0,0.1))' }}
+                                                            />
+                                                        </svg>
+                                                    )}
+                                                    {renderRoads(ps)}
+                                                    {renderReviewSurfaces(ps)}
+                                                    {renderPolygonSetbacks(ps)}
+                                                    
+                                                    {/* Render Adjacent Lands */}
+                                                    {adjacentLandEnabled && ps.site.adjacentLandGroups?.some(g => {
+                                                        if (!g || !g.edges) return false;
+                                                        if (Array.isArray(g.edges)) return g.edges.length > 0;
+                                                        if (typeof g.edges.size === 'number') return g.edges.size > 0;
+                                                        if (typeof g.edges.length === 'number') return g.edges.length > 0;
+                                                        return false;
+                                                    }) && (() => {
+                                                        const pts = ps.normalized.points; const curves = ps.normalized.curves; const N = pts.length;
+                                                        const buildingCoverage = parseFloat(ps.site.inputs.buildingCoverage || 60) / 100;
+                                                        const totalH = ps.massing.totalHeight || 15;
+                                                        const parcelDepth = 30;
+                                                        const parcels = [];
+                                                        
+                                                        ps.site.adjacentLandGroups.forEach((group, gIdx) => {
+                                                            const edgesArr = Array.isArray(group.edges) ? group.edges : Array.from(group.edges || []);
+                                                            if (edgesArr.length === 0) return;
+                                                            const dIn = new Array(N).fill(0); const dOut = new Array(N).fill(0);
+                                                            edgesArr.forEach(eIdx => { 
+                                                                const road = getSiteRoads(ps.site).find(r => r.edgeIndex === eIdx || r.edgeIndices?.includes(eIdx)); 
+                                                                const rw = road ? parseFloat(road.width) || 0 : 0; 
+                                                                dIn[eIdx] = -rw; dOut[eIdx] = -(rw + parcelDepth); 
+                                                            });
+                                                            const inner = offsetPolygonByArray(pts, curves, dIn); 
+                                                            const outer = offsetPolygonByArray(pts, curves, dOut);
+                                                            if (!inner || !outer) return;
+                                                            const patchPts = [...inner.points, ...[...outer.points].reverse()];
+                                                            const cx = patchPts.reduce((acc, p) => acc + p.x, 0) / patchPts.length;
+                                                            const cy = patchPts.reduce((acc, p) => acc + p.y, 0) / patchPts.length;
+                                                            const gPath = patchPts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${w / 2 + p.x * scale} ${d / 2 + p.y * scale}`).join(' ') + ' Z';
+                                                            const coverageScale = Math.sqrt(buildingCoverage);
+                                                            const bldgPts = scalePolygon(patchPts, null, coverageScale, {x: cx, y: cy}).points;
+                                                            
+                                                            parcels.push(
+                                                                <React.Fragment key={`adj-${ps.site.id}-${group.id}`}>
+                                                                    <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible', position: 'absolute', top: 0, left: 0 }}>
+                                                                        <path d={gPath} fill={isDarkMode ? 'rgba(168,85,247,0.12)' : 'rgba(168,85,247,0.08)'} stroke="#a855f7" strokeWidth="1" strokeDasharray="4,4" />
+                                                                        {(() => {
+                                                                            const wx = ps.layout.x + cx * Math.cos(ps.layout.rotation) - cy * Math.sin(ps.layout.rotation);
+                                                                            const wy = ps.layout.y + cx * Math.sin(ps.layout.rotation) + cy * Math.cos(ps.layout.rotation);
+                                                                            const pos = projectWorldToScreen(wx, wy, 0);
+                                                                            overlayLabelsBuffer.push({
+                                                                                id: `adj-${ps.site.id}-${group.id}`,
+                                                                                text: `臨地 ${gIdx+1}`,
+                                                                                origX: pos.x, origY: pos.y, x: pos.x, y: pos.y,
+                                                                                width: 40, height: 16,
+                                                                                style: { color: '#a855f7', fontWeight: 'bold', fontSize: '10px' }
+                                                                            });
+                                                                            return null;
+                                                                        })()}
+                                                                    </svg>
+                                                                    <BuildingLayer points={bldgPts} height={totalH * scale} x={0} y={0} z={0} rotation={0} scale={scale} color={isDarkMode ? 'rgba(168,85,247,0.15)' : 'rgba(168,85,247,0.1)'} strokeColor="#a855f7" showFrame={true} opacity={0.4} visible={true} isSlabMode={false} isDarkMode={isDarkMode} isViolation={false} />
+                                                                </React.Fragment>
+                                                            );
+                                                        });
+                                                        return parcels;
+                                                    })()}
+
+                                                    {/* Render CheckLines for Active Site */}
+                                                    {isPrimary && calculateCheckLines().map(line => (
+                                                        <CheckLine key={line.id} {...line} baseRotation={0} viewAngleX={viewAngleX} rotationZ={rotationZ} visible={true} dashed={line.dashed} thick={line.thick} isDarkMode={isDarkMode} labelPosRatio={0.2} />
+                                                    ))}
+
+                                                    {/* Render Massing Layers */}
+                                                    {ps.massing.layers.map((layer, i) => (
+                                                        <BuildingLayer 
+                                                            key={`fl-${ps.site.id}-${layer.id}`} 
+                                                            width={layer.widthPx} 
+                                                            depth={layer.depthPx} 
+                                                            height={layer.height} 
+                                                            x={layer.shiftX} 
+                                                            y={layer.shiftYPx} 
+                                                            z={layer.z} 
+                                                            rotation={layer.rotation} 
+                                                            pivot={isPrimary && selectedFloor?.id === layer.id ? selectedFloor.pivot : (ps.site.floorSettings?.[layer.id]?.pivot || {x: 0, y: 0})} 
+                                                            scale={scale} 
+                                                            points={layer.points} 
+                                                            curves={layer.curves} 
+                                                            color={isPrimary ? colors.floor : "rgba(148, 163, 184, 0.4)"} 
+                                                            strokeColor={isPrimary ? colors.stroke : "rgba(100, 116, 139, 0.5)"} 
+                                                            showFrame={true} 
+                                                            opacity={layer.opacity || 1}
+                                                            visible={layer.visible !== false}
+                                                            isSlabMode={false}
+                                                            isDarkMode={isDarkMode}
+                                                            isViolation={layer.isViolation} 
+                                                            onClick={(e) => isPrimary && handleLayerClick(e, layer)} 
+                                                        />
+                                                    ))}
+                                                </div>
+                                            );
+                                        })}
+                                        
+                                        {/* 獨立放置精準預覽 (Independent Placement Preview) */}
+                                        {placementMode === 'independent' && placementPreview && (() => {
+                                            const pW = placementPreview.width;
+                                            const pD = placementPreview.depth;
+                                            const previewPoints = [
+                                                { x: -pW/2, y: -pD/2 },
+                                                { x: pW/2, y: -pD/2 },
+                                                { x: pW/2, y: pD/2 },
+                                                { x: -pW/2, y: pD/2 }
+                                            ];
+                                            const previewColor = placementPreview.isOverlapping ? "rgba(239, 68, 68, 0.4)" : "rgba(16, 185, 129, 0.4)";
+                                            const previewStrokeColor = placementPreview.isOverlapping ? "#ef4444" : "#10b981";
+                                            
+                                            return (
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    top: '50%', left: '50%',
+                                                    width: w, height: d,
+                                                    marginLeft: -w/2, marginTop: -d/2,
+                                                    transform: `translate3d(${(placementPreview.x - projectBounds.center.x) * scale}px, ${(placementPreview.y - projectBounds.center.y) * scale}px, 0) rotateZ(${placementPreview.rotation}rad)`,
+                                                    transformStyle: 'preserve-3d',
+                                                    pointerEvents: 'none',
+                                                    zIndex: 100
+                                                }}>
+                                                    {/* 預覽的 3D 建築體 */}
+                                                    <BuildingLayer 
+                                                        width={pW * scale} 
+                                                        depth={pD * scale} 
+                                                        height={15 * scale} 
+                                                        x={0} 
+                                                        y={0} 
+                                                        z={0} 
+                                                        rotation={0} 
+                                                        scale={scale} 
+                                                        points={previewPoints} 
+                                                        color={previewColor} 
+                                                        strokeColor={previewStrokeColor} 
+                                                        showFrame={true} 
+                                                        opacity={0.6}
+                                                        visible={true}
+                                                        isSlabMode={false}
+                                                        isDarkMode={isDarkMode}
+                                                        isViolation={placementPreview.isOverlapping} 
+                                                    />
+                                                    {/* 預覽的底部 SVG */}
+                                                    <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible', position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 12 }}>
+                                                        <path
+                                                            d={generateSvgPath(previewPoints, null, scale, w / 2, d / 2)}
+                                                            fill={previewColor}
+                                                            stroke={previewStrokeColor}
+                                                            strokeWidth="3"
+                                                            strokeDasharray="5,5"
+                                                        />
+                                                    </svg>
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+
+                                    {/* 2D 螢幕投影懸浮標籤 (Screen-Space Billboard Labels) */}
+                                    <div style={{
+                                        position: 'absolute',
+                                        top: '50%', left: '50%',
+                                        width: `${w}px`, height: `${d}px`,
+                                        marginLeft: -w/2, marginTop: -d/2,
+                                        pointerEvents: 'none',
+                                        zIndex: 150
+                                    }}>
+                                        {(() => {
+                                            for (let iter = 0; iter < 8; iter++) {
+                                                for (let i = 0; i < overlayLabelsBuffer.length; i++) {
+                                                    for (let j = i + 1; j < overlayLabelsBuffer.length; j++) {
+                                                        const b1 = overlayLabelsBuffer[i];
+                                                        const b2 = overlayLabelsBuffer[j];
+                                                        const dx = b1.x - b2.x;
+                                                        const dy = b1.y - b2.y;
+                                                        const absDx = Math.abs(dx);
+                                                        const absDy = Math.abs(dy);
+                                                        const minW = (b1.width + b2.width) / 2 + 10;
+                                                        const minH = (b1.height + b2.height) / 2 + 6;
+                                                        
+                                                        if (absDx < minW && absDy < minH) {
+                                                            const overlapY = minH - absDy;
+                                                            const pushY = overlapY / 2;
+                                                            if (dy >= 0) { b1.y += pushY; b2.y -= pushY; } 
+                                                            else { b1.y -= pushY; b2.y += pushY; }
+                                                            
+                                                            const overlapX = minW - absDx;
+                                                            const pushX = (overlapX / 2) * 0.2;
+                                                            if (dx >= 0) { b1.x += pushX; b2.x -= pushX; } 
+                                                            else { b1.x -= pushX; b2.x += pushX; }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            
+                                            return (
+                                                <>
+                                                    <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
+                                                        {overlayLabelsBuffer.map(b => {
+                                                            const hasMoved = Math.hypot(b.x - b.origX, b.y - b.origY) > 2;
+                                                            if (!hasMoved) return null;
+                                                            return (
+                                                                <line 
+                                                                    key={`line-${b.id}`} 
+                                                                    x1={b.origX} y1={b.origY} x2={b.x} y2={b.y} 
+                                                                    stroke={isDarkMode ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)"} 
+                                                                    strokeWidth="1.5" strokeDasharray="3,3" 
+                                                                />
+                                                            );
+                                                        })}
+                                                    </svg>
+                                                    {overlayLabelsBuffer.map(b => (
+                                                        <div
+                                                            key={b.id}
+                                                            className={`absolute select-none transform -translate-x-1/2 -translate-y-1/2 ${b.className || ''}`}
+                                                            style={{
+                                                                left: `${b.x}px`,
+                                                                top: `${b.y}px`,
+                                                                pointerEvents: b.isSite ? 'auto' : 'none',
+                                                                cursor: b.isSite ? 'pointer' : 'default',
+                                                                ...(b.style || {})
+                                                            }}
+                                                            onMouseEnter={b.isSite ? (() => setHoveredSiteId(b.siteId)) : undefined}
+                                                            onMouseLeave={b.isSite ? (() => setHoveredSiteId(null)) : undefined}
+                                                            onClick={b.isSite ? ((e) => { e.stopPropagation(); onSwitchSite(b.siteId); }) : undefined}
+                                                        >
+                                                            {b.isSite ? (
+                                                                <>
+                                                                    <MapPin size={14} className={b.siteId === activeSiteId ? 'text-white' : 'theme-text'} />
+                                                                    <span>{b.text}</span>
+                                                                </>
+                                                            ) : b.text}
+                                                        </div>
+                                                    ))}
+                                                </>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </div>
+                {isMobile && isProjectSummaryVisible && (
+                    <div className="fixed bottom-4 right-4 z-40 w-[260px]">
+                        <div className="theme-panel-glass backdrop-blur border theme-border rounded-xl shadow-lg p-3">
+                            <div className="flex items-center justify-between">
+                                <div className="text-[10px] font-bold uppercase tracking-widest theme-text-muted flex items-center gap-1"><Building2 size={12} /> Project Summary</div>
+                                <button onClick={() => setIsProjectSummaryVisible(false)} className="theme-text-muted hover:opacity-70"><X size={14} /></button>
+                            </div>
+                            <div className="space-y-2 mt-2">
+                                <SummaryRow label="專案名稱" value={inputs.projectName} />
+                                <SummaryRow label="工程預算" value={`${formatNum(res.estimatedBudget)} 萬`} highlight />
+                                <SummaryRow label="建築物高度" value={`${formatNum(massingLayers.totalHeight)} m`} />
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {isMobile && !isProjectSummaryVisible && (
+                    <div className="fixed bottom-4 right-4 z-40">
+                        <button onClick={() => setIsProjectSummaryVisible(true)} className="p-2 rounded-full theme-panel-glass border theme-border theme-text shadow-lg"><Eye size={16} /></button>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+export default Visualizer3D;
+

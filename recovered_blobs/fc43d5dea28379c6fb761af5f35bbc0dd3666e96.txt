@@ -1,0 +1,204 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;700;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+    /* Fonts */
+    --font-heading: 'Archivo Black', 'Impact', sans-serif;
+    --font-body: 'Inter', sans-serif;
+    
+    /* Custom Shadows */
+    --shadow-brutal: 12px 12px 0 #111111;
+    --shadow-brutal-sm: 6px 6px 0 #111111;
+    --shadow-brutal-deep: 20px 20px 40px #bebebe, -20px -20px 40px #ffffff;
+    
+    /* Animation */
+    --animate-heavy-impact: heavy-impact 0.2s ease-out;
+}
+
+@layer base {
+    /* S47 - BRUTALIST 3D (LIGHT MODE) */
+    :root, .theme-neumorphism {
+        --bg-body: #D3D3D3; /* Concrete Grey */
+        --bg-panel: #FFFFFF;
+        --bg-input: #E0E0E0;
+        
+        --text-primary: #111111;
+        --text-secondary: #333333;
+        --text-muted: #666666;
+        --text-accent: #FF4500; /* Orange Accent */
+        
+        --border-strong: #111111;
+        --border-subtle: #666666;
+        
+        --shadow-main: var(--shadow-brutal);
+        --shadow-hover: 16px 16px 0 #111111;
+        --shadow-active: 4px 4px 0 #111111;
+        
+        --radius-none: 0;
+        --border-width-med: 4px;
+        --border-width-thick: 8px;
+
+        --font-main: var(--font-body);
+        --font-title: var(--font-heading);
+    }
+
+    /* CYBERPUNK MODE (DARK MODE) */
+    .theme-cyberpunk {
+        --bg-body: #050510;
+        --bg-panel: rgba(10, 10, 15, 0.9);
+        --bg-input: rgba(0, 30, 30, 0.4);
+        
+        --text-primary: #00ffcc;
+        --text-secondary: #d94fd5; /* Cyber pink */
+        --text-muted: #d94fd5;
+        --text-accent: #fcee0a; /* Cyber yellow */
+        
+        --border-strong: #00ffcc;
+        --border-subtle: #00ffcc;
+        
+        --shadow-main: 0 0 10px rgba(0, 255, 204, 0.2);
+        --shadow-hover: 0 0 20px rgba(0, 255, 204, 0.4);
+        --shadow-active: inset 0 0 10px rgba(0, 255, 204, 0.3);
+        
+        --radius-none: 0;
+        --border-width-med: 2px;
+        --border-width-thick: 4px;
+
+        --font-main: var(--font-body);
+        --font-title: 'Courier New', monospace;
+    }
+}
+
+@layer utilities {
+    .no-scrollbar::-webkit-scrollbar {
+        display: none;
+    }
+    .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+    
+    /* THEME UTILITIES */
+    .theme-bg {
+        background-color: var(--bg-body);
+        transition: background-color 0.4s ease;
+    }
+
+    .theme-panel {
+        background-color: var(--bg-panel);
+        border: var(--border-width-med) solid var(--border-strong);
+        border-radius: var(--radius-none);
+        box-shadow: var(--shadow-main);
+        color: var(--text-primary);
+        transition: all 0.2s ease-out;
+    }
+
+    .theme-panel-glass {
+        background-color: rgba(255, 255, 255, 0.9);
+        border: var(--border-width-med) solid var(--border-strong);
+        border-radius: var(--radius-none);
+        box-shadow: var(--shadow-main);
+        backdrop-filter: blur(10px);
+        color: var(--text-primary);
+    }
+
+    .theme-input {
+        background-color: var(--bg-input);
+        border: 2px solid var(--border-strong);
+        border-radius: var(--radius-none);
+        padding: 0.75rem;
+        color: var(--text-primary);
+        transition: all 0.2s ease;
+    }
+
+    .theme-input:focus {
+        background-color: #FFFFFF;
+        box-shadow: 4px 4px 0 var(--border-strong);
+        outline: none;
+        border-color: var(--text-accent);
+    }
+
+    .theme-btn {
+        background-color: #FFFFFF;
+        border: var(--border-width-med) solid var(--border-strong);
+        border-radius: var(--radius-none);
+        box-shadow: var(--shadow-main);
+        color: var(--text-primary);
+        font-family: var(--font-title);
+        text-transform: uppercase;
+        font-weight: 900;
+        padding: 0.75rem 1.5rem;
+        cursor: pointer;
+        transition: all 0.1s ease-out;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .theme-btn:hover {
+        transform: translate(-4px, -4px);
+        box-shadow: var(--shadow-hover);
+        background-color: var(--text-accent);
+        color: #FFFFFF;
+    }
+
+    .theme-btn:active {
+        transform: translate(4px, 4px);
+        box-shadow: var(--shadow-active);
+    }
+
+    .theme-btn-active {
+        background-color: var(--text-accent);
+        color: #FFFFFF;
+        border-color: var(--border-strong);
+        box-shadow: var(--shadow-active);
+        transform: translate(2px, 2px);
+    }
+
+    .theme-text {
+        color: var(--text-primary);
+        font-family: var(--font-main);
+    }
+
+    .theme-text-title {
+        color: var(--text-primary);
+        font-family: var(--font-title);
+        line-height: 1;
+    }
+
+    .theme-text-muted {
+        color: var(--text-muted);
+    }
+
+    .theme-text-accent {
+        color: var(--text-accent);
+    }
+
+    .theme-border {
+        border-color: var(--border-strong);
+    }
+
+    .theme-divide {
+        border-color: var(--border-strong);
+    }
+}
+
+body {
+    -webkit-tap-highlight-color: transparent;
+    background-color: var(--bg-body);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    transition: background-color 0.4s ease;
+}
+
+h1, h2, h3, h4 {
+    font-family: var(--font-heading);
+    text-transform: uppercase;
+    letter-spacing: -0.02em;
+}
+
+@keyframes heavy-impact {
+    0% { transform: scale(1); }
+    50% { transform: scale(0.98); }
+    100% { transform: scale(1); }
+}

@@ -1,0 +1,64 @@
+Created At: 2026-07-02T16:55:08Z
+Completed At: 2026-07-02T16:55:08Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1590
+Total Bytes: 81038
+Showing lines 660 to 715
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+660:                                     }
+661:                                 }
+662:                                 return newP;
+663:                             });
+664:                             if (modified) {
+665:                                 next[k] = { ...next[k], baseGeometry: { ...otherGeom, points: newOtherPoints } };
+666:                             }
+667:                         }
+668:                     }
+669:                 }
+670:             }
+671:             
+672:             next[idx] = { ...next[idx], baseGeometry: geometry };
+673:             return next;
+674:         });
+675:     };
+676: 
+677:     useEffect(() => {
+678:         // Clear totalCFA override when base area or ratio changes
+679:         // eslint-disable-next-line
+680:         setOverrides(prev => { 
+681:             if ('totalCFA' in prev) {
+682:                 const copy = { ...prev }; 
+683:                 delete copy.totalCFA; 
+684:                 return copy; 
+685:             }
+686:             return prev;
+687:         });
+688:     }, [inputs.baseArea, inputs.floorRatio, setOverrides, activeSiteIndex]);
+689: 
+690:     const handleInputChange = (e) => { const { name, value } = e.target; setInputs(prev => ({ ...prev, [name]: value })); };
+691:     const handleOverride = (id, value) => { const val = parseFloat(value); if (!isNaN(val)) setOverrides(prev => ({ ...prev, [id]: val })); };
+692:     const handleParamChange = (key, value) => { setParams(prev => ({ ...prev, [key]: parseFloat(value) || 0 })); };
+693:     const updateBaseDim = (key, val) => { setInputs(prev => ({ ...prev, [key]: val })); };
+694:     const handleUpdateInputs = (key, val) => { setInputs(prev => ({ ...prev, [key]: val })); };
+695:     const handleUpdateSiteSetting = (id, key, val) => {
+696:         setSites(prev => prev.map(s => s.id === id ? { ...s, [key]: val } : s));
+697:     };
+698: 
+699:     const inputClass = "w-full p-3 border-2 border-[var(--border-strong)] rounded-none outline-none theme-input text-sm font-bold num-font transition-all duration-200";
+700:     const labelClass = "block text-xs font-black theme-text-muted uppercase mb-1 tracking-wider";
+701: 
+702:     return (
+703:         <div 
+704:             className="fixed inset-0 w-full h-full bg-sky-50 dark:bg-slate-900 overflow-hidden text-stone-800"
+705:             onContextMenu={(e) => {
+706:                 e.preventDefault();
+707:                 setContextMenu({ isOpen: true, x: e.clientX, y: e.clientY });
+708:             }}
+709:         >
+710:             <ContextMenu 
+711:                 x={contextMenu.x} 
+712:                 y={contextMenu.y} 
+713:                 isOpen={contextMenu.isOpen} 
+714:                 onClose={() => setContextMenu(prev => ({ ...prev, isOpen: false }))} 
+715:                 onAction={handleMenuAction}
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

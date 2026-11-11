@@ -1,0 +1,34 @@
+Created At: 2026-07-07T17:54:46Z
+Completed At: 2026-07-07T17:54:46Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 825
+Total Bytes: 43458
+Showing lines 710 to 735
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+710:                                 <input type="text" name="district" value={inputs.district} onChange={handleInputChange} className={inputClass} />
+711:                             </div>
+712:                             <div>
+713:                                 <label className={labelClass}>土地使用分區</label>
+714:                                 <input type="text" name="zoneType" value={inputs.zoneType} onChange={handleInputChange} className={inputClass} />
+715:                             </div>
+716:                             <div>
+717:                                 <label className={labelClass}>適用都市計畫</label>
+718:                                 <input type="text" name="urbanPlanName" value={inputs.urbanPlanName} onChange={handleInputChange} className={inputClass} />
+719:                             </div>
+720:                         </div>
+721:                         
+722:                         <div className="grid grid-cols-2 gap-4">
+723:                             <div>
+724:                                 <label className={labelClass}>法定建蔽率 (%)</label>
+725:                                 <input type="number" name="coverageRatio" value={inputs.coverageRatio} onChange={handleInputChange} className={inputClass} />
+726:                             </div>
+727:                             <div>
+728:                                 <label className={labelClass}>法定容積率 (%)</label>
+729:                                 <input type="number" name="floorRatio" value={inputs.floorRatio} onChange={handleInputChange} className={inputClass} />
+730:                             </div>
+731:                         </div>
+732:                     </div>
+733:                 </DraggablePanel>
+734:             )}
+735: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

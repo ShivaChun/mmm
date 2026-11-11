@@ -1,0 +1,109 @@
+Created At: 2026-07-06T18:00:37Z
+Completed At: 2026-07-06T18:00:37Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1145
+Total Bytes: 81866
+Showing lines 300 to 400
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+300:                     const localA = [
+301:                         { x: -wA/2, y: -dA/2 }, { x: wA/2, y: -dA/2 },
+302:                         { x: wA/2, y: dA/2 }, { x: -wA/2, y: dA/2 }
+303:                     ];
+304:                     const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % 4;
+305:                     roadEdgeP1 = { x: localA[roadEdgeIdx].x + apA.x, y: localA[roadEdgeIdx].y + apA.y };
+306:                     roadEdgeP2 = { x: localA[(roadEdgeIdx + 1) % 4].x + apA.x, y: localA[(roadEdgeIdx + 1) % 4].y + apA.y };
+307:                 }
+308:                 
+309:                 const roadMid = { x: (roadEdgeP1.x + roadEdgeP2.x) / 2, y: (roadEdgeP1.y + roadEdgeP2.y) / 2 };
+310:                 
+311:                 let minDst = Infinity;
+312:                 let bestEdgeIdx = 2; // 預設為頂部邊 (edgeIndex 2)
+313:                 
+314:                 for (let j = 0; j < 4; j++) {
+315:                     const p1 = worldPtsNew[j];
+316:                     const p2 = worldPtsNew[(j + 1) % 4];
+317:                     const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+318:                     const dst = Math.pow(mid.x - roadMid.x, 2) + Math.pow(mid.y - roadMid.y, 2);
+319:                     if (dst < minDst) {
+320:                         minDst = dst;
+321:                         bestEdgeIdx = j;
+322:                     }
+323:                 }
+324:                 
+325:                 newSite.inputs.roads = [{
+326:                     ...mainRoad,
+327:                     edgeIndex: bestEdgeIdx,
+328:                     edgeIndices: [bestEdgeIdx],
+329:                     orientation: bestEdgeIdx === 0 ? 'bottom' : bestEdgeIdx === 1 ? 'right' : bestEdgeIdx === 2 ? 'top' : 'left'
+330:                 }];
+331:             }
+332:         }
+333: 
+334:         newSite.position = position;
+335: 
+336:         setSites(prev => [...prev, newSite]);
+337:         setActiveSiteIndex(newIdx);
+338:         setPlacementMode(false);
+339:         setReferenceEdge(null);
+340:         setPlacementOffset({ x: 0, y: 0, rotation: 0 });
+341:         setShowAddSiteDialog(false);
+342:     };
+343: 
+344:     // ── Site Management ──
+345:     const handleAddSite = (snapDir) => {
+346:         if (snapDir === 'free') {
+347:             setPlacementMode('independent');
+348:             setReferenceEdge(null);
+349:             setShowAddSiteDialog(false);
+350:             return;
+351:         }
+352: 
+353:         const newIdx = sites.length;
+354:         const label = SITE_LABELS[newIdx] || String(newIdx + 1);
+355:         const newSite = createDefaultSite(`基地 ${label}`, Date.now(), false);
+356: 
+357:         // 基準基地為 基地 A (sites[0])
+358:         const siteA = sites[0];
+359:         const apA = siteA.position || { x: 0, y: 0, rotation: 0 };
+360:         const radA = apA.rotation || 0;
+361:         
+362:         // 完全繼承主基地 A 的主要幾何尺寸與 inputs，確保共用同一個 WCS 軸線
+363:         const wA = parseFloat(siteA.inputs.baseWidthM || siteA.inputs.baseWidth) || Math.sqrt(siteA.inputs.baseArea || 239);
+364:         const dA = parseFloat(siteA.inputs.baseDepthM) || ((siteA.inputs.baseArea || 239) / wA);
+365:         
+366:         newSite.inputs = {
+367:             ...siteA.inputs,
+368:             projectName: siteA.inputs.projectName || '',
+369:             baseWidth: siteA.inputs.baseWidth,
+370:             baseWidthM: siteA.inputs.baseWidthM,
+371:             baseDepthM: siteA.inputs.baseDepthM,
+372:             baseArea: siteA.inputs.baseArea,
+373:             roads: [] // 新基地不自帶實體道路，共享道路系統
+374:         };
+375: 
+376:         const wNew = wA;
+377:         const dNew = dA;
+378: 
+379:         // 計算基地 A 在 WCS 軸線下的朝右向量 (ux) 與朝上向量 (uy)
+380:         const cosA = Math.cos(radA);
+381:         const sinA = Math.sin(radA);
+382:         const ux = { x: cosA, y: sinA };
+383:         const uy = { x: -sinA, y: cosA };
+384: 
+385:         let newPos = { x: 0, y: 0, rotation: radA };
+386:         if (snapDir === 'back') {
+387:             // 緊貼後方：沿著基地 A 的 -uy 方向推出
+388:             newPos.x = apA.x - uy.x * ((dA + dNew) / 2);
+389:             newPos.y = apA.y - uy.y * ((dA + dNew) / 2);
+390:         } else if (snapDir === 'left') {
+391:             // 緊貼左側：沿著基地 A 的 -ux 方向推出
+392:             newPos.x = apA.x - ux.x * ((wA + wNew) / 2);
+393:             newPos.y = apA.y - ux.y * ((wA + wNew) / 2);
+394:         } else if (snapDir === 'right') {
+395:             // 緊貼右側：沿著基地 A 的 +ux 方向推出
+396:             newPos.x = apA.x + ux.x * ((wA + wNew) / 2);
+397:             newPos.y = apA.y + ux.y * ((wA + wNew) / 2);
+398:         }
+399: 
+400:         // 計算新基地的世界坐標多邊形端點，用以做防碰撞重疊檢查
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

@@ -1,0 +1,104 @@
+Created At: 2026-07-07T17:54:44Z
+Completed At: 2026-07-07T17:54:44Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 825
+Total Bytes: 43458
+Showing lines 730 to 825
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+730:                             </div>
+731:                         </div>
+732:                     </div>
+733:                 </DraggablePanel>
+734:             )}
+735: 
+736:             {activePanels.includes('sites') && (
+737:                 <DraggablePanel title="基地管理" onClose={() => setActivePanels(prev => prev.filter(p => p !== 'sites'))} defaultSize={{w: 360, h: 400}}>
+738:                     <div className="space-y-4">
+739:                         <div className="flex items-center gap-2 flex-wrap mb-4">
+740:                             {sites.map((site, idx) => (
+741:                                 <button 
+742:                                     key={site.id} 
+743:                                     onClick={() => setActiveSiteIndex(idx)} 
+744:                                     className={`px-4 py-2 font-black transition-all border-4 ${activeSiteIndex === idx ? 'theme-btn-active scale-105 shadow-[4px_4px_0_#111]' : 'theme-btn border-transparent opacity-70 hover:opacity-100 hover:border-black'}`}
+745:                                 >
+746:                                     {site.name}
+747:                                 </button>
+748:                             ))}
+749:                             <button onClick={() => setShowAddSiteDialog(true)} className="px-3 py-2 border-4 border-dashed border-[var(--border-strong)] text-[var(--text-muted)] hover:border-black hover:text-black font-black transition-colors rounded-none flex items-center gap-1">
+750:                                 <Plus size={20} strokeWidth={3} /> 新增
+751:                             </button>
+752:                         </div>
+753:                         {sites.length > 1 && (
+754:                             <button onClick={() => handleRemoveSite(activeSite.id)} className="w-full flex items-center justify-center gap-2 p-3 border-4 border-red-200 bg-red-50 text-red-600 font-black hover:bg-red-600 hover:text-white hover:border-red-700 transition-colors">
+755:                                 <Trash2 size={20} strokeWidth={3} /> 刪除當前基地
+756:                             </button>
+757:                         )}
+758:                     </div>
+759:                 </DraggablePanel>
+760:             )}
+761: 
+762:             {activePanels.includes('summary') && (
+763:                 <DraggablePanel title="評估結果" onClose={() => setActivePanels(prev => prev.filter(p => p !== 'summary'))} defaultSize={{w: 500, h: 700}}>
+764:                     <div className="space-y-6">
+765:                         <div className="grid grid-cols-2 gap-4">
+766:                             <div className="p-4 border-4 border-black bg-stone-50">
+767:                                 <div className="text-xs font-black text-stone-500 mb-1">總銷售坪數</div>
+768:                                 <div className="text-3xl font-black text-[var(--text-accent)] num-font">{formatNum(toPing(finalRes.totalSaleable))} <span className="text-sm text-stone-600">坪</span></div>
+769:                             </div>
+770:                             <div className="p-4 border-4 border-black bg-stone-50">
+771:                                 <div className="text-xs font-black text-stone-500 mb-1">容積單價</div>
+772:                                 <div className="text-3xl font-black text-emerald-600 num-font">{formatNum((finalRes.totalSaleable / (finalRes.base * (inputs.floorRatio/100))).toFixed(2))} <span className="text-sm text-stone-600">坪/容積</span></div>
+773:                             </div>
+774:                         </div>
+775:                         <table className="w-full text-sm border-collapse border-4 border-black bg-white shadow-[4px_4px_0_#111]">
+776:                             <tbody>
+777:                                 <InputRow id="totalCFA" label="總樓地板面積" value={finalRes.totalCFA} />
+778:                                 <InputRow id="totalSaleable" label="總銷售面積" value={finalRes.totalSaleable} highlight={true} />
+779:                                 <InputRow id="balconyArea" label="陽台面積" value={finalRes.balconyArea} />
+780:                                 <InputRow id="totalCarArea" label="停車空間面積" value={finalRes.totalCarArea} />
+781:                             </tbody>
+782:                         </table>
+783:                     </div>
+784:                 </DraggablePanel>
+785:                     </div>
+786:                 )}
+787: 
+788:                 {/* 3D VISUALIZER SECTION - FULLSCREEN */}
+789:                 <section style={{ position: 'fixed', inset: 0, zIndex: 10 }}>
+790:                     <Visualizer3D
+791:                         isDarkMode={isDarkMode}
+792:                         setIsDarkMode={setIsDarkMode}
+793:                         sites={sites}
+794:                         activeSiteId={activeSite.id}
+795:                         inputs={{ ...inputs, baseArea: finalRes.base, floorsAbove: finalRes.floorsAbove }}
+796:                         res={finalRes}
+797:                         siteResults={siteResults}
+798:                         aggregateResults={combined}
+799:                         onUpdateBaseDim={updateBaseDim}
+800:                         onUpdateRoads={handleUpdateRoads}
+801:                         onUpdateInputs={handleUpdateInputs}
+802:                         onUpdateSiteSetting={handleUpdateSiteSetting}
+803:                         showCheckLines={showCheckLines}
+804:                         setShowCheckLines={setShowCheckLines}
+805:                         showHeightRatio={showHeightRatio}
+806:                         setShowHeightRatio={setShowHeightRatio}
+807:                         showWeiLao={showWeiLao}
+808:                         setShowWeiLao={setShowWeiLao}
+809:                         showBackyard={showBackyard}
+810:                         setShowBackyard={setShowBackyard}
+811:                         isConstraintMode={isConstraintMode}
+812:                         setIsConstraintMode={setIsConstraintMode}
+813:                         onUnusedAreaChange={setUnusedArea}
+814:                         placementMode={placementMode}
+815:                         referenceEdge={referenceEdge}
+816:                         setReferenceEdge={setReferenceEdge}
+817:                         placementOffset={placementOffset}
+818:                         setPlacementOffset={setPlacementOffset}
+819:                         onConfirmPlacement={handleConfirmPlacement}
+820:                         onUpdateSiteGeometry={(geom) => handleUpdateSiteGeometry(activeSiteIndex, geom)}
+821:                         setActiveSiteIndex={setActiveSiteIndex}
+822:                         onAction={handleCanvasAction}
+823:                         activePanels={activePanels}
+824:                         togglePanel={togglePanel}
+825:                         appState={{ sites, setSites, activeSiteIndex, setActiveSiteIndex, inputs, overrides, lots, totalBaseArea, finalRes, combined, params, isEditMode, setIsEditMode, handleInputChange, handleOverride, handleParamChange, updateRoad, addRoad, removeRoad, addLot, removeLot, updateLot, showAddSiteDialog, setShowAddSiteDialog, handleAddSite: () => setShowAddSiteDialog(true) }}
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

@@ -1,0 +1,99 @@
+Created At: 2026-07-07T02:05:18Z
+Completed At: 2026-07-07T02:05:19Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 1187
+Total Bytes: 83719
+Showing lines 370 to 460
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+370:             baseWidthM: siteA.inputs.baseWidthM,
+371:             baseDepthM: siteA.inputs.baseDepthM,
+372:             baseArea: siteA.inputs.baseArea,
+373:             roads: [] // 新基地不自帶實體道路，共享道路系統
+374:         };
+375: 
+376:         const wNew = wA;
+377:         const dNew = dA;
+378: 
+379:         // 計算基地 A 在 WCS 軸線下的朝右向量 (ux) 與朝上向量 (uy)
+380:         const cosA = Math.cos(radA);
+381:         const sinA = Math.sin(radA);
+382:         const ux = { x: cosA, y: sinA };
+383:         const uy = { x: -sinA, y: cosA };
+384: 
+385:         let newPos = { x: 0, y: 0, rotation: radA };
+386:         if (snapDir === 'back') {
+387:             // 緊貼後方：沿著基地 A 的 -uy 方向推出
+388:             newPos.x = apA.x - uy.x * ((dA + dNew) / 2);
+389:             newPos.y = apA.y - uy.y * ((dA + dNew) / 2);
+390:         } else if (snapDir === 'left') {
+391:             // 緊貼左側：沿著基地 A 的 -ux 方向推出
+392:             newPos.x = apA.x - ux.x * ((wA + wNew) / 2);
+393:             newPos.y = apA.y - ux.y * ((wA + wNew) / 2);
+394:         } else if (snapDir === 'right') {
+395:             // 緊貼右側：沿著基地 A 的 +ux 方向推出
+396:             newPos.x = apA.x + ux.x * ((wA + wNew) / 2);
+397:             newPos.y = apA.y + ux.y * ((wA + wNew) / 2);
+398:         }
+399: 
+400:         // 計算新基地的世界坐標多邊形端點，用以做防碰撞重疊檢查
+401:         const localNew = [
+402:             { x: -wNew/2, y: -dNew/2 }, { x: wNew/2, y: -dNew/2 },
+403:             { x: wNew/2, y: dNew/2 }, { x: -wNew/2, y: dNew/2 }
+404:         ];
+405:         const cosN = Math.cos(newPos.rotation);
+406:         const sinN = Math.sin(newPos.rotation);
+407:         const worldPtsNew = localNew.map(p => ({
+408:             x: newPos.x + (p.x * cosN - p.y * sinN),
+409:             y: newPos.y + (p.x * sinN + p.y * cosN)
+410:         }));
+411: 
+412:         // 計算面前道路在世界坐標下的實際 Road Polygon
+413:         let roadWorldPolygon = null;
+414:         if (siteA && siteA.inputs?.roads) {
+415:             const mainRoad = siteA.inputs.roads.find(r => r.type === 'primary') || siteA.inputs.roads[0];
+416:             if (mainRoad) {
+417:                 const roadWidth = parseFloat(mainRoad.width) || 6;
+418:                 const ptsA = siteA.baseGeometry?.points || siteA.basePoints || null;
+419:                 let p1, p2;
+420:                 
+421:                 if (ptsA && ptsA.length > 2) {
+422:                     const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % ptsA.length;
+423:                     const pt1 = ptsA[roadEdgeIdx];
+424:                     const pt2 = ptsA[(roadEdgeIdx + 1) % ptsA.length];
+425:                     p1 = { 
+426:                         x: apA.x + (pt1.x * cosA - pt1.y * sinA), 
+427:                         y: apA.y + (pt1.x * sinA + pt1.y * cosA) 
+428:                     };
+429:                     p2 = { 
+430:                         x: apA.x + (pt2.x * cosA - pt2.y * sinA), 
+431:                         y: apA.y + (pt2.x * sinA + pt2.y * cosA) 
+432:                     };
+433:                 } else {
+434:                     const localA = [
+435:                         { x: -wA/2, y: -dA/2 }, { x: wA/2, y: -dA/2 },
+436:                         { x: wA/2, y: dA/2 }, { x: -wA/2, y: dA/2 }
+437:                     ];
+438:                     const roadEdgeIdx = parseInt(mainRoad.edgeIndex !== undefined ? mainRoad.edgeIndex : 2) % 4;
+439:                     const pt1 = localA[roadEdgeIdx];
+440:                     const pt2 = localA[(roadEdgeIdx + 1) % 4];
+441:                     p1 = { 
+442:                         x: apA.x + (pt1.x * cosA - pt1.y * sinA), 
+443:                         y: apA.y + (pt1.x * sinA + pt1.y * cosA) 
+444:                     };
+445:                     p2 = { 
+446:                         x: apA.x + (pt2.x * cosA - pt2.y * sinA), 
+447:                         y: apA.y + (pt2.x * sinA + pt2.y * cosA) 
+448:                     };
+449:                 }
+450:                 
+451:                 const dx = p2.x - p1.x;
+452:                 const dy = p2.y - p1.y;
+453:                 const L = Math.sqrt(dx*dx + dy*dy);
+454:                 if (L > 0.001) {
+455:                     const ptsA_pts = ptsA || [
+456:                         { x: -wA/2, y: -dA/2 }, { x: wA/2, y: -dA/2 },
+457:                         { x: wA/2, y: dA/2 }, { x: -wA/2, y: dA/2 }
+458:                     ];
+459:                     const sCentroidLocal = getPolygonCentroid(ptsA_pts);
+460:                     const sCentroid = {
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.

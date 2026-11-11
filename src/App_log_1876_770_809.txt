@@ -1,0 +1,48 @@
+Created At: 2026-07-02T16:57:31Z
+Completed At: 2026-07-02T16:57:31Z
+File Path: `file:///c:/Users/Shiva.C/Documents/trae_projects/ARCHI/cal_base/dist/YRA-React/src/App.jsx`
+Total Lines: 809
+Total Bytes: 43519
+Showing lines 770 to 809
+The following code has been modified to include a line number before every line, in the format: <line_number>: <original_line>. Please note that any changes targeting the original code should remove the line number, colon, and leading space.
+770:                 <DraggablePanel title="評估結果" onClose={() => setActivePanels(prev => prev.filter(p => p !== 'summary'))} defaultSize={{w: 500, h: 700}}>
+771:                     <div className="space-y-6">
+772:                         <div className="grid grid-cols-2 gap-4">
+773:                             <div className="p-4 border-4 border-black bg-stone-50">
+774:                                 <div className="text-xs font-black text-stone-500 mb-1">總銷售坪數</div>
+775:                                 <div className="text-3xl font-black text-[var(--text-accent)] num-font">{formatNum(toPing(finalRes.totalSaleable))} <span className="text-sm text-stone-600">坪</span></div>
+776:                             </div>
+777:                             <div className="p-4 border-4 border-black bg-stone-50">
+778:                                 <div className="text-xs font-black text-stone-500 mb-1">容積單價</div>
+779:                                 <div className="text-3xl font-black text-emerald-600 num-font">{formatNum((finalRes.totalSaleable / (finalRes.base * (inputs.floorRatio/100))).toFixed(2))} <span className="text-sm text-stone-600">坪/容積</span></div>
+780:                             </div>
+781:                         </div>
+782:                         <table className="w-full text-sm border-collapse border-4 border-black bg-white shadow-[4px_4px_0_#111]">
+783:                             <tbody>
+784:                                 <InputRow id="totalCFA" label="總樓地板面積" value={finalRes.totalCFA} />
+785:                                 <InputRow id="totalSaleable" label="總銷售面積" value={finalRes.totalSaleable} highlight={true} />
+786:                                 <InputRow id="balconyArea" label="陽台面積" value={finalRes.balconyArea} />
+787:                                 <InputRow id="totalCarArea" label="停車空間面積" value={finalRes.totalCarArea} />
+788:                             </tbody>
+789:                         </table>
+790:                     </div>
+791:                 </DraggablePanel>
+792:             )}
+793:             
+794:             {showAddSiteDialog && (
+795:                 <div className="fixed inset-0 z-[100] flex items-center justify-center">
+796:                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowAddSiteDialog(false)} />
+797:                     <div className="relative bg-white shadow-2xl border-4 border-black p-8 max-w-md w-full mx-4">
+798:                         <button onClick={() => setShowAddSiteDialog(false)} className="absolute top-4 right-4 text-stone-400 hover:text-black"><X size={20} /></button>
+799:                         <h3 className="text-2xl font-black mb-2 flex items-center gap-3"><MapPinned size={24} className="text-[var(--text-accent)]" /> 新增基地</h3>
+800:                         <p className="text-sm text-stone-500 mb-6">是否緊貼 <span className="font-black text-black">{activeSite.name}</span>？</p>
+801:                         <div className="space-y-3">
+802:                             <button onClick={() => handleAddSite('back')} className="w-full p-4 border-4 border-black font-bold hover:bg-stone-100 text-left flex items-center gap-3 transition-colors">🔗 緊貼後方（背面）</button>
+803:                             <button onClick={() => handleAddSite('left')} className="w-full p-4 border-4 border-black font-bold hover:bg-stone-100 text-left flex items-center gap-3 transition-colors">🔗 緊貼左側</button>
+804:                             <button onClick={() => handleAddSite('right')} className="w-full p-4 border-4 border-black font-bold hover:bg-stone-100 text-left flex items-center gap-3 transition-colors">🔗 緊貼右側</button>
+805:                             <div className="border-t-4 border-stone-200 my-2" />
+806:                             <button onClick={() => handleAddSite('free')} className="w-full p-4 border-4 border-dashed border-stone-400 font-bold hover:bg-stone-50 text-left flex items-center gap-3 text-stone-600 transition-colors">📍 獨立放置（不緊貼）</button>
+807:                         </div>
+808: The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
+809: 
+The above content does NOT show the entire file contents. If you need to view any lines of the file which were not shown to complete your task, call this tool again to view those lines.
