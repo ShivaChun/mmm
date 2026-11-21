@@ -34,7 +34,18 @@ export const ContextMenu = ({
     );
 
     const menuRef = useRef(null);
-    const [pos, setPos] = useState({ x: Math.max(16, x), y: Math.max(16, y) });
+    const clampMenuPos = (rawX, rawY, menuW = 260, menuH = 360) => {
+        if (typeof window === 'undefined') return { x: Math.max(12, rawX), y: Math.max(12, rawY) };
+        const maxX = Math.max(12, window.innerWidth - menuW - 12);
+        const maxY = Math.max(12, window.innerHeight - Math.min(menuH, window.innerHeight - 24) - 12);
+        return {
+            x: Math.max(12, Math.min(rawX, maxX)),
+            y: Math.max(12, Math.min(rawY, maxY))
+        };
+    };
+    const [pos, setPos] = useState(() => clampMenuPos(x, y));
+    const posRef = useRef(pos);
+    posRef.current = pos;
     const [size, setSize] = useState({ w: 260, h: 'auto' });
     const scaleFactor = typeof size.w === "number" ? Math.max(0.5, Math.min(2.0, size.w / 260)) : 1;
     const dragRef = useRef({ isDragging: false, isResizing: false, startX: 0, startY: 0, startPos: { x: 0, y: 0 }, startSize: { w: 0, h: 0 } });
@@ -43,7 +54,8 @@ export const ContextMenu = ({
     const glassUrlRef = useRef('');
 
     useEffect(() => {
-        setPos({ x: Math.max(16, x), y: Math.max(16, y) });
+        const rect = menuRef.current?.getBoundingClientRect();
+        setPos(clampMenuPos(x, y, rect?.width || 260, rect?.height || 360));
     }, [x, y]);
 
     useEffect(() => {
@@ -85,51 +97,90 @@ export const ContextMenu = ({
         };
     }, []);
 
-    const handleGlobalMouseMove = (e) => {
+    const getEventClientPos = (e) => {
+        if (e.touches && e.touches.length > 0) {
+            return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+        }
+        if (e.changedTouches && e.changedTouches.length > 0) {
+            return { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY };
+        }
+        return { clientX: e.clientX, clientY: e.clientY };
+    };
+
+    const handleGlobalMove = (e) => {
+        if (!dragRef.current.isDragging && !dragRef.current.isResizing) return;
+        if (e.cancelable) e.preventDefault();
+        const { clientX, clientY } = getEventClientPos(e);
+        if (clientX === undefined || clientY === undefined) return;
+
         if (dragRef.current.isDragging) {
-            const dx = e.clientX - dragRef.current.startX;
-            const dy = e.clientY - dragRef.current.startY;
+            const dx = clientX - dragRef.current.startX;
+            const dy = clientY - dragRef.current.startY;
+            const maxX = typeof window !== 'undefined' ? Math.max(0, window.innerWidth - 60) : 9999;
+            const maxY = typeof window !== 'undefined' ? Math.max(0, window.innerHeight - 60) : 9999;
             setPos({
-                x: Math.max(0, dragRef.current.startPos.x + dx),
-                y: Math.max(0, dragRef.current.startPos.y + dy)
+                x: Math.max(0, Math.min(maxX, dragRef.current.startPos.x + dx)),
+                y: Math.max(0, Math.min(maxY, dragRef.current.startPos.y + dy))
             });
         } else if (dragRef.current.isResizing) {
-            const dx = e.clientX - dragRef.current.startX;
-            const dy = e.clientY - dragRef.current.startY;
+            const dx = clientX - dragRef.current.startX;
+            const dy = clientY - dragRef.current.startY;
             setSize({
-                w: Math.max(260, dragRef.current.startSize.w + dx),
+                w: Math.max(240, dragRef.current.startSize.w + dx),
                 h: dragRef.current.startSize.h === 'auto' ? 'auto' : Math.max(200, dragRef.current.startSize.h + dy)
             });
         }
     };
 
-    const handleGlobalMouseUp = () => {
+    const handleGlobalUp = () => {
         dragRef.current.isDragging = false;
         dragRef.current.isResizing = false;
-        document.removeEventListener('mousemove', handleGlobalMouseMove);
-        document.removeEventListener('mouseup', handleGlobalMouseUp);
+        document.removeEventListener('mousemove', handleGlobalMove);
+        document.removeEventListener('mouseup', handleGlobalUp);
+        document.removeEventListener('touchmove', handleGlobalMove);
+        document.removeEventListener('touchend', handleGlobalUp);
+        document.removeEventListener('touchcancel', handleGlobalUp);
     };
 
-    const handleHeaderMouseDown = (e) => {
+    useEffect(() => {
+        return () => {
+            document.removeEventListener('mousemove', handleGlobalMove);
+            document.removeEventListener('mouseup', handleGlobalUp);
+            document.removeEventListener('touchmove', handleGlobalMove);
+            document.removeEventListener('touchend', handleGlobalUp);
+            document.removeEventListener('touchcancel', handleGlobalUp);
+        };
+    }, []);
+
+    const handleHeaderDragStart = (e) => {
         if (e.target.closest('button')) return;
+        e.stopPropagation();
+        const { clientX, clientY } = getEventClientPos(e);
         dragRef.current.isDragging = true;
-        dragRef.current.startX = e.clientX;
-        dragRef.current.startY = e.clientY;
-        dragRef.current.startPos = { ...pos };
-        document.addEventListener('mousemove', handleGlobalMouseMove);
-        document.addEventListener('mouseup', handleGlobalMouseUp);
+        dragRef.current.startX = clientX;
+        dragRef.current.startY = clientY;
+        dragRef.current.startPos = { ...posRef.current };
+        document.addEventListener('mousemove', handleGlobalMove, { passive: false });
+        document.addEventListener('mouseup', handleGlobalUp);
+        document.addEventListener('touchmove', handleGlobalMove, { passive: false });
+        document.addEventListener('touchend', handleGlobalUp);
+        document.addEventListener('touchcancel', handleGlobalUp);
     };
 
-    const handleResizeMouseDown = (e) => {
-        e.preventDefault();
+    const handleResizeDragStart = (e) => {
+        if (e.cancelable) e.preventDefault();
         e.stopPropagation();
+        const { clientX, clientY } = getEventClientPos(e);
         dragRef.current.isResizing = true;
-        dragRef.current.startX = e.clientX;
-        dragRef.current.startY = e.clientY;
+        dragRef.current.startX = clientX;
+        dragRef.current.startY = clientY;
         const rect = menuRef.current.getBoundingClientRect();
         dragRef.current.startSize = { w: rect.width, h: rect.height };
-        document.addEventListener('mousemove', handleGlobalMouseMove);
-        document.addEventListener('mouseup', handleGlobalMouseUp);
+        document.addEventListener('mousemove', handleGlobalMove, { passive: false });
+        document.addEventListener('mouseup', handleGlobalUp);
+        document.addEventListener('touchmove', handleGlobalMove, { passive: false });
+        document.addEventListener('touchend', handleGlobalUp);
+        document.addEventListener('touchcancel', handleGlobalUp);
     };
     const [activeSubmenus, setActiveSubmenus] = useState([]);
     const toggleSubmenu = (menu) => setActiveSubmenus(prev => prev.includes(menu) ? prev.filter(m => m !== menu) : [...prev, menu]); // 'sites' | 'project' | 'checklines' | null
@@ -168,7 +219,7 @@ export const ContextMenu = ({
             )}
             <div
                 ref={menuRef}
-                className="fixed z-[9999] theme-panel shadow-2xl border-2 border-[var(--border-strong)] flex flex-col"
+                className="fixed z-[9999] theme-panel shadow-2xl border-2 border-[var(--border-strong)] flex flex-col max-w-[calc(100vw-16px)] max-h-[calc(100dvh-24px)]"
                 style={{ 
                     left: `${pos.x}px`, 
                     top: `${pos.y}px`, 
@@ -176,17 +227,27 @@ export const ContextMenu = ({
                     height: size.h === 'auto' ? 'auto' : `${size.h}px`,
                     backdropFilter: glassFilterUrl ? 'url(#liquid-glass-filter)' : 'blur(16px)'
                 }}
+                onTouchStart={(e) => e.stopPropagation()}
+                onContextMenu={(e) => e.stopPropagation()}
             >
-                {/* 標題欄 */}
+                {/* 標題欄 (支援滑鼠與手機觸控拖曳) */}
                 <div 
-            className="px-3 py-2 flex items-center justify-between border-b-2 border-[var(--border-strong)] bg-[var(--text-accent)]/10 cursor-move select-none"
-        onMouseDown={handleHeaderMouseDown}
-    >
-                <span className="text-[10px] font-black tracking-widest uppercase theme-text-muted">快捷選單 / MENU</span>
-                <button onClick={onClose} className="p-0.5 hover:text-red-500 transition-colors">
-                    <X size={12} />
-                </button>
-            </div>
+                    className="px-3 py-2.5 flex items-center justify-between border-b-2 border-[var(--border-strong)] bg-[var(--text-accent)]/10 cursor-move select-none touch-none"
+                    style={{ touchAction: 'none' }}
+                    onMouseDown={handleHeaderDragStart}
+                    onTouchStart={handleHeaderDragStart}
+                >
+                    <div className="flex items-center gap-2 pointer-events-none">
+                        <div className="flex flex-col gap-0.5 opacity-60">
+                            <div className="w-3.5 h-0.5 bg-current rounded-full" />
+                            <div className="w-3.5 h-0.5 bg-current rounded-full" />
+                        </div>
+                        <span className="text-[10px] font-black tracking-widest uppercase theme-text-muted">快捷選單 / MENU</span>
+                    </div>
+                    <button onClick={onClose} className="p-1 hover:text-red-500 transition-colors">
+                        <X size={14} />
+                    </button>
+                </div>
 
             <div className="py-1.5 flex flex-col gap-0.5 px-1.5 flex-1 overflow-y-auto custom-scrollbar" style={{ zoom: scaleFactor, transformOrigin: "top left" }}>
 
@@ -235,10 +296,22 @@ export const ContextMenu = ({
                             ))}
                             <div className="border-t border-[var(--border-strong)]/40 mx-2" />
                             <button
+                                onClick={() => { onAction('draw_current_site'); onClose(); }}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-black text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                            >
+                                ✏️ 點拉線重繪目前基地
+                            </button>
+                            <button
+                                onClick={() => { onAction('draw_new_site'); onClose(); }}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-black text-emerald-600 hover:bg-emerald-500/10 transition-colors"
+                            >
+                                ➕ 點拉線繪製新基地
+                            </button>
+                            <button
                                 onClick={() => { onAction('open_add_site'); onClose(); }}
                                 className="w-full flex items-center gap-2 px-3 py-2 text-xs font-black text-[var(--text-accent)] hover:bg-[var(--text-accent)]/10 transition-colors"
                             >
-                                <Plus size={12} /> 新增規劃基地
+                                <Plus size={12} /> 新增規劃基地（貼齊/放置）
                             </button>
                         </div>
                     )}
@@ -415,10 +488,12 @@ export const ContextMenu = ({
 
             {/* 拖曳調整大小的手柄 */}
             <div
-                className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize flex items-end justify-end p-1 opacity-50 hover:opacity-100"
-                onMouseDown={handleResizeMouseDown}
+                className="absolute bottom-0 right-0 w-6 h-6 cursor-se-resize flex items-end justify-end p-1 opacity-60 hover:opacity-100 touch-none select-none"
+                style={{ touchAction: 'none' }}
+                onMouseDown={handleResizeDragStart}
+                onTouchStart={handleResizeDragStart}
             >
-                <div className="w-2 h-2 border-r-2 border-b-2 border-[var(--text-accent)]" />
+                <div className="w-2.5 h-2.5 border-r-2 border-b-2 border-[var(--text-accent)]" />
             </div>
         </div>
         </>

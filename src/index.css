@@ -1,10 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
 @import "tailwindcss";
 
 @theme {
     /* Fonts */
-    --font-heading: 'Archivo Black', 'Impact', sans-serif;
-    --font-body: 'Inter', sans-serif;
+    --font-heading: 'Noto Sans TC', 'Archivo Black', sans-serif;
+    --font-body: 'Noto Sans TC', 'Inter', sans-serif;
     
     /* Custom Shadows */
     --shadow-brutal: 12px 12px 0 #111111;
@@ -16,56 +16,94 @@
 }
 
 @layer base {
-    /* S47 - BRUTALIST 3D (LIGHT MODE) */
-    :root, .theme-neumorphism {
-        --bg-body: #D3D3D3; /* Concrete Grey */
+    /* ── YRA Design Tokens（黑 / 暖灰 / 主色橘 / 互動藍 / 警示紅） ── */
+    :root, .theme-neumorphism, .theme-blueprint {
+        /* 色彩系統 */
+        --yra-black: #171614;
+        --yra-warm-50: #FAF9F6;
+        --yra-warm-100: #F4F2EE;
+        --yra-warm-200: #EAE6DF;
+        --yra-warm-300: #DDD8CE;
+        --yra-warm-500: #767168;
+        --yra-warm-700: #3F3C37;
+        --yra-orange: #E85D2A;       /* 主色橘 */
+        --yra-blue: #2563EB;         /* 互動藍 */
+        --yra-red: #DC2626;          /* 警示紅 */
+
+        /* 字級三層 */
+        --yra-text-display: 1.25rem; /* 20px 主標題 / 關鍵數字 */
+        --yra-text-body: 0.875rem;   /* 14px 內文 / 表單 */
+        --yra-text-caption: 0.75rem; /* 12px 次要說明 / 標註 */
+
+        /* 間距 */
+        --yra-space-xs: 0.375rem;
+        --yra-space-sm: 0.75rem;
+        --yra-space-md: 1rem;
+        --yra-space-lg: 1.5rem;
+
+        /* 邊框與偏移陰影 */
+        --yra-border: 1px solid var(--yra-warm-300);
+        --yra-border-strong: 1.5px solid var(--yra-black);
+        --yra-radius-sm: 0.625rem;
+        --yra-radius-md: 1rem;
+        --yra-radius-lg: 1.5rem;
+        --yra-shadow-card: 0 8px 28px rgba(23, 22, 20, 0.08), 0 1px 3px rgba(23, 22, 20, 0.05);
+        --yra-shadow-offset: 4px 4px 0 rgba(23, 22, 20, 0.14);
+
+        /* 相容既有 theme 變數 */
+        --bg-body: var(--yra-warm-200);
         --bg-panel: #FFFFFF;
-        --bg-input: #E0E0E0;
+        --bg-input: var(--yra-warm-100);
+        --bg-surface: var(--yra-warm-50);
+        --bg-surface-muted: var(--yra-warm-200);
         
-        --text-primary: #111111;
-        --text-secondary: #333333;
-        --text-muted: #666666;
-        --text-accent: #FF4500; /* Orange Accent */
+        --text-primary: var(--yra-black);
+        --text-secondary: var(--yra-warm-700);
+        --text-muted: var(--yra-warm-500);
+        --text-accent: var(--yra-orange);
         
-        --border-strong: #111111;
-        --border-subtle: #666666;
+        --border-strong: var(--yra-black);
+        --border-subtle: var(--yra-warm-300);
         
-        --shadow-main: var(--shadow-brutal);
-        --shadow-hover: 16px 16px 0 #111111;
-        --shadow-active: 4px 4px 0 #111111;
+        --shadow-main: var(--yra-shadow-offset);
+        --shadow-soft: var(--yra-shadow-card);
+        --shadow-hover: 6px 6px 0 rgba(23, 22, 20, 0.22);
+        --shadow-active: 2px 2px 0 rgba(23, 22, 20, 0.22);
         
-        --radius-none: 0;
-        --border-width-med: 4px;
-        --border-width-thick: 8px;
+        --radius-none: 0.75rem;
+        --border-width-med: 1.5px;
+        --border-width-thick: 2px;
 
         --font-main: var(--font-body);
         --font-title: var(--font-heading);
     }
 
-    /* CYBERPUNK MODE (DARK MODE) */
+    /* 深色模式：與淺色同家族之暖黑 / 暖灰 / 單一橘色強調 */
     .theme-cyberpunk {
-        --bg-body: #050510;
-        --bg-panel: rgba(10, 10, 15, 0.9);
-        --bg-input: rgba(0, 30, 30, 0.4);
-        
-        --text-primary: #00ffcc;
-        --text-secondary: #d94fd5; /* Cyber pink */
-        --text-muted: #d94fd5;
-        --text-accent: #fcee0a; /* Cyber yellow */
-        
-        --border-strong: #00ffcc;
-        --border-subtle: #00ffcc;
-        
-        --shadow-main: 0 0 10px rgba(0, 255, 204, 0.2);
-        --shadow-hover: 0 0 20px rgba(0, 255, 204, 0.4);
-        --shadow-active: inset 0 0 10px rgba(0, 255, 204, 0.3);
-        
-        --radius-none: 0;
-        --border-width-med: 2px;
-        --border-width-thick: 4px;
+        --bg-body: #141311;
+        --bg-panel: rgba(26, 25, 23, 0.95);
+        --bg-input: rgba(38, 36, 33, 0.9);
+        --bg-surface: #1F1E1B;
+        --bg-surface-muted: #2A2824;
+
+        --text-primary: #F5F3EF;
+        --text-secondary: #D4CFC6;
+        --text-muted: #9E988E;
+        --text-accent: #E85D2A;
+
+        --border-strong: #4A463F;
+        --border-subtle: #33302B;
+
+        --shadow-main: 4px 4px 0 rgba(0, 0, 0, 0.45);
+        --shadow-hover: 6px 6px 0 rgba(0, 0, 0, 0.6);
+        --shadow-active: 2px 2px 0 rgba(0, 0, 0, 0.5);
+
+        --radius-none: 0.75rem;
+        --border-width-med: 1.5px;
+        --border-width-thick: 2px;
 
         --font-main: var(--font-body);
-        --font-title: 'Courier New', monospace;
+        --font-title: var(--font-heading);
     }
 }
 
@@ -180,6 +218,91 @@
 
     .theme-divide {
         border-color: var(--border-strong);
+    }
+
+    /* 克制暖灰建築卡片樣式（黑 / 暖灰 / 單一橘色強調） */
+    .yra-card {
+        background-color: rgba(255, 255, 255, 0.94);
+        border: 1px solid #DDD8CE;
+        box-shadow: 0 8px 28px rgba(23, 22, 20, 0.08), 0 1px 3px rgba(23, 22, 20, 0.06);
+        backdrop-filter: blur(16px);
+        color: #171614;
+    }
+
+    .theme-cyberpunk .yra-card {
+        background-color: rgba(18, 18, 22, 0.92);
+        border-color: rgba(255, 255, 255, 0.14);
+        color: #F5F3EF;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+
+    .yra-num, .num-font {
+        font-variant-numeric: tabular-nums;
+        font-feature-settings: "tnum" 1;
+    }
+
+    .yra-display {
+        font-size: var(--yra-text-display);
+        line-height: 1.25;
+        font-weight: 800;
+        letter-spacing: -0.01em;
+    }
+
+    .yra-body {
+        font-size: var(--yra-text-body);
+        line-height: 1.5;
+        font-weight: 500;
+    }
+
+    .yra-caption {
+        font-size: var(--yra-text-caption);
+        line-height: 1.4;
+        color: var(--text-muted);
+    }
+
+    .pb-safe {
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .pt-safe {
+        padding-top: env(safe-area-inset-top, 0px);
+    }
+    .pl-safe {
+        padding-left: env(safe-area-inset-left, 0px);
+    }
+    .pr-safe {
+        padding-right: env(safe-area-inset-right, 0px);
+    }
+}
+
+html, body, #root {
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+    overscroll-behavior: none;
+}
+
+/* A4 PDF 專屬列印排版 */
+@media print {
+    @page {
+        size: A4 portrait;
+        margin: 12mm;
+    }
+    body {
+        background: #FFFFFF !important;
+        color: #171614 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .no-print {
+        display: none !important;
+    }
+    .print-only-report {
+        display: block !important;
+        position: static !important;
+        width: 100% !important;
+        max-width: none !important;
+        box-shadow: none !important;
+        border: none !important;
     }
 }
 

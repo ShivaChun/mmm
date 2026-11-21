@@ -1,16 +1,21 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Box, LayoutTemplate, Sun, Moon, Maximize2, PanelRightOpen, CheckCircle2, AlertTriangle, GripHorizontal, ChevronUp, ChevronDown, Map as MapIcon, Shovel, Layers, Lock, Unlock, Hexagon, Compass, Move, Square, Building2, Car, Bike, X, Eye, ToggleRight, ToggleLeft, CheckSquare } from 'lucide-react';
+import { Box, LayoutTemplate, Sun, Moon, Maximize2, PanelRightOpen, CheckCircle2, AlertTriangle, GripHorizontal, ChevronUp, ChevronDown, Map as MapIcon, Shovel, Layers, Lock, Unlock, Hexagon, Compass, Move, Square, Building2, Car, Bike, X, Eye, ToggleRight, ToggleLeft, CheckSquare, Scale } from 'lucide-react';
 import { useFloorStore } from '../store/floorStore';
 import { useSiteAnalysis } from '../hooks/useSiteAnalysis';
 import { generateSvgPath, calculatePolygonArea, getPolygonCentroid, getPolygonBounds, scalePolygon, offsetPolygon, offsetPolygonByArray, getSegmentNormal, getLineIntersection, discretizePolygon, pointInPolygon, allInsidePolygon, polygonSignedArea, clipPolygonByPolygon, fitPolygonWithin, distToSegment, normalizeWithCurves, splitPolygon, splitPolygonByCount, getSplitUnits, constrainPolygonToLegalBoundary } from '../utils/polygon';
 import { toPing, formatNum, toSqm } from '../utils/geometry';
 import { createSeededRandom } from '../utils/random';
-import PlanAnalysis2D from './PlanAnalysis2D';
+import UnifiedSceneHUD, { useUnifiedEditorController, InScenePolygonPlane } from './PlanAnalysis2D';
 import { CheckLine, Si } from './Si';
 import { FloorInfoCard } from './FloorInfoCard';
 import { ArtisticCompass } from './ArtisticCompass';
 import { BuildingLayer, SummaryRow } from './SitePolygonEditor';
 import { DraggablePanel } from './DraggablePanel';
+import { ChecklineRegulationOverlay } from './RegulationGuidePanel';
+import { computeSunState, SunPathPanel, SunPathArc3D, AOGroundShadows } from './SunPathControls';
+import { SunComparisonModal } from './SunComparisonModal';
+import { CadastralImportModal } from './CadastralImportModal';
+import { UnifiedMobileSheet } from './UnifiedMobileSheet';
 
 const getSiteDefaultDims = (site) => {
     const sInputs = site?.inputs || {};
@@ -31,11 +36,13 @@ const getSiteDefaultRect = (site) => {
     ];
 };
 
-// 半透明灰色特斯拉 (Tesla) 紙片車行駛動畫組件（降低出現頻率、以直立於車道方向之半透明紙片車呈現，抵達盡頭直接消失不縮放，轉視角無破綻）
-const RoadVehicles3D = React.memo(({ lanes, scale, w, d, isDarkMode }) => {
+// 半透明灰色特斯拉 (Tesla) 2.5D 紙片車行駛動畫組件（採用與行人完全一致之面向鏡頭 2.5D 立牌效果，無論 3D 或 2D 俯視模式皆完整清晰呈現）
+const RoadVehicles3D = React.memo(({ lanes, scale, w, d, isDarkMode, rotationZ = 0, viewAngleX = 60, aoMode = false, aoNight = false }) => {
     const carRefs = useRef([]);
     const scaleRef = useRef(scale);
     scaleRef.current = scale;
+    const cameraRef = useRef({ rotationZ, viewAngleX });
+    cameraRef.current = { rotationZ, viewAngleX };
 
     // 使用幾何特徵簽章穩定化車道資料，避免父層因點選或旋轉視角重繪時重建陣列導致動畫重置
     const lanesSignature = useMemo(() => {
@@ -69,12 +76,13 @@ const RoadVehicles3D = React.memo(({ lanes, scale, w, d, isDarkMode }) => {
             }
             if (totalLen < 8) return;
 
-            // 大幅降低車輛出現頻率：每車道僅配置 1 台（超長道路最多 2 台），並加入長緩衝週期 (cycleLen > totalLen) 形成自然的空檔間隔
-            const vehicleCount = totalLen > 145 ? 2 : 1;
-            const cycleLen = totalLen + Math.max(75, totalLen * 0.85);
-            const baseSpeed = 7.2 + (laneIdx % 2) * 1.1; // m/s
+            // 視覺降噪：全場景僅保留至多 1 台低飽和比例車，避免搶走建築量體視覺焦點
+            if (list.length >= 1) return;
+            const vehicleCount = 1;
+            const cycleLen = totalLen + Math.max(95, totalLen * 1.15);
+            const baseSpeed = 6.4; // m/s
             for (let c = 0; c < vehicleCount; c++) {
-                const modelType = (laneIdx % 2 === 1 && c === 0 && totalLen > 90) ? 'cybertruck' : (c % 2 === 0 ? 'model3' : 'modelY');
+                const modelType = 'model3';
                 list.push({
                     id: `lane-${laneIdx}-car-${c}`,
                     modelType,
@@ -103,18 +111,32 @@ const RoadVehicles3D = React.memo(({ lanes, scale, w, d, isDarkMode }) => {
         const tick = (now) => {
             const elapsedSec = now / 1000;
             const curScale = scaleRef.current || 1;
+            const { rotationZ: camRotZ, viewAngleX: camViewX } = cameraRef.current;
 
             preparedVehicles.forEach((v, idx) => {
                 const el = carRefs.current[idx];
                 if (!el) return;
                 const dist = ((elapsedSec * v.speed) + v.phaseOffset * v.cycleLen) % v.cycleLen;
-                // 抵達道路盡頭直接消失，不使用縮小過渡
+                // 抵達道路盡頭以淡出 (Fade-out) 效果平滑消失
                 if (dist > v.totalLen) {
+                    el.style.opacity = '0';
                     el.style.visibility = 'hidden';
                     el.style.transform = 'translate3d(0px, 0px, -9999px)';
                     return;
                 }
-                el.style.visibility = 'visible';
+
+                const fadeOutDist = Math.min(22, Math.max(3.5, v.totalLen * 0.18));
+                const fadeInDist = Math.min(10, Math.max(2.5, v.totalLen * 0.10));
+                let alpha = 1;
+                if (dist > v.totalLen - fadeOutDist) {
+                    const tOut = Math.max(0, Math.min(1, (v.totalLen - dist) / Math.max(1e-6, fadeOutDist)));
+                    alpha = tOut * tOut * (3 - 2 * tOut);
+                } else if (dist < fadeInDist) {
+                    const tIn = Math.max(0, Math.min(1, dist / Math.max(1e-6, fadeInDist)));
+                    alpha = tIn * tIn * (3 - 2 * tIn);
+                }
+                el.style.visibility = alpha <= 0.005 ? 'hidden' : 'visible';
+                el.style.opacity = alpha.toFixed(3);
 
                 let segIdx = 0;
                 for (let i = 0; i < v.cumLengths.length - 1; i++) {
@@ -145,7 +167,14 @@ const RoadVehicles3D = React.memo(({ lanes, scale, w, d, isDarkMode }) => {
                     angleDeg = angleDeg + (prevA - angleDeg) * blend;
                 }
 
-                el.style.transform = `translate3d(${xPx}px, ${yPx}px, 0.5px) rotateZ(${angleDeg}deg)`;
+                // 2D 俯視模式與 3D 模式皆嚴格依照車道行進方向角度 (angleDeg) 旋轉；2D 俯視時僅在車身上下顛倒時做垂直鏡像 (scaleY) 保持車頂朝上，不強制轉正
+                if (camViewX <= 5) {
+                    const screenCos = Math.cos(((angleDeg + camRotZ) * Math.PI) / 180);
+                    const flipY = screenCos < -0.05 ? -1 : 1;
+                    el.style.transform = `translate3d(${xPx}px, ${yPx}px, 0.5px) rotateZ(${angleDeg}deg) scale3d(1, ${flipY}, 1)`;
+                } else {
+                    el.style.transform = `translate3d(${xPx}px, ${yPx}px, 0.5px) rotateZ(${angleDeg}deg)`;
+                }
             });
             frameId = requestAnimationFrame(tick);
         };
@@ -161,13 +190,25 @@ const RoadVehicles3D = React.memo(({ lanes, scale, w, d, isDarkMode }) => {
     const svgW = Math.max(24, 5.6 * scale);
     const svgH = svgW * 0.46;
 
-    // 建築模型半透明灰紙片車配色（整體半透明呈現）
-    const paperFill = isDarkMode ? 'rgba(182, 194, 210, 0.52)' : 'rgba(138, 150, 168, 0.54)';
-    const paperAccent = isDarkMode ? 'rgba(226, 232, 240, 0.62)' : 'rgba(203, 213, 225, 0.64)';
-    const windowFill = isDarkMode ? 'rgba(30, 41, 59, 0.38)' : 'rgba(241, 245, 249, 0.45)';
-    const paperStroke = isDarkMode ? 'rgba(248, 250, 252, 0.68)' : 'rgba(51, 65, 85, 0.65)';
-    const wheelFill = isDarkMode ? 'rgba(30, 41, 59, 0.62)' : 'rgba(51, 65, 85, 0.60)';
-    const groundShadowCol = isDarkMode ? 'rgba(15, 23, 42, 0.28)' : 'rgba(30, 41, 59, 0.16)';
+    // 建築模型半透明灰紙片車配色（AO 模式下轉為簡約建築模型深灰黑車體）
+    const paperFill = aoMode
+        ? (aoNight ? 'rgba(22, 26, 32, 0.92)' : 'rgba(38, 44, 54, 0.86)')
+        : (isDarkMode ? 'rgba(182, 194, 210, 0.52)' : 'rgba(138, 150, 168, 0.54)');
+    const paperAccent = aoMode
+        ? (aoNight ? 'rgba(100, 116, 139, 0.65)' : 'rgba(148, 163, 184, 0.72)')
+        : (isDarkMode ? 'rgba(226, 232, 240, 0.62)' : 'rgba(203, 213, 225, 0.64)');
+    const windowFill = aoMode
+        ? (aoNight ? 'rgba(12, 15, 20, 0.82)' : 'rgba(226, 232, 240, 0.42)')
+        : (isDarkMode ? 'rgba(30, 41, 59, 0.38)' : 'rgba(241, 245, 249, 0.45)');
+    const paperStroke = aoMode
+        ? (aoNight ? 'rgba(148, 163, 184, 0.55)' : 'rgba(15, 23, 42, 0.85)')
+        : (isDarkMode ? 'rgba(248, 250, 252, 0.68)' : 'rgba(51, 65, 85, 0.65)');
+    const wheelFill = aoMode
+        ? 'rgba(15, 23, 42, 0.92)'
+        : (isDarkMode ? 'rgba(30, 41, 59, 0.62)' : 'rgba(51, 65, 85, 0.60)');
+    const groundShadowCol = aoMode
+        ? (aoNight ? 'rgba(0, 0, 0, 0.55)' : 'rgba(15, 23, 42, 0.28)')
+        : (isDarkMode ? 'rgba(15, 23, 42, 0.28)' : 'rgba(30, 41, 59, 0.16)');
 
     const renderPaperTesla = (modelType) => {
         if (modelType === 'cybertruck') {
@@ -240,6 +281,8 @@ const RoadVehicles3D = React.memo(({ lanes, scale, w, d, isDarkMode }) => {
         );
     };
 
+    const isTopDown2D = viewAngleX <= 5;
+
     return (
         <React.Fragment>
             {preparedVehicles.map((v, idx) => {
@@ -261,35 +304,63 @@ const RoadVehicles3D = React.memo(({ lanes, scale, w, d, isDarkMode }) => {
                             willChange: 'transform'
                         }}
                     >
-                        {/* 貼合於道路表面的車底柔和半透明陰影 */}
-                        <div
-                            style={{
-                                position: 'absolute',
-                                left: -(wPx * 0.88) / 2,
-                                top: -(wPx * 0.22) / 2,
-                                width: wPx * 0.88,
-                                height: wPx * 0.22,
-                                borderRadius: '999px',
-                                background: groundShadowCol,
-                                transform: 'translateZ(0.2px)'
-                            }}
-                        />
-                        {/* 直立於車道方向之半透明紙片車（以車輪底部為基準垂直立在路面上，隨 3D 場景自然旋轉無破綻） */}
-                        <div
-                            style={{
-                                position: 'absolute',
-                                left: -wPx / 2,
-                                top: -hPx,
-                                width: wPx,
-                                height: hPx,
-                                transformOrigin: '50% 100%',
-                                transform: 'rotateX(-90deg)',
-                                transformStyle: 'preserve-3d',
-                                backfaceVisibility: 'visible'
-                            }}
-                        >
-                            {carSvg}
-                        </div>
+                        {isTopDown2D ? (
+                            /* 2D 俯視模式：完全順沿車道行進方向角度平貼顯示，不強制轉正 */
+                            <div
+                                style={{
+                                    position: 'absolute',
+                                    left: -wPx / 2,
+                                    top: -hPx / 2,
+                                    width: wPx,
+                                    height: hPx,
+                                    pointerEvents: 'none'
+                                }}
+                            >
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        left: wPx * 0.08,
+                                        bottom: -hPx * 0.06,
+                                        width: wPx * 0.84,
+                                        height: Math.max(4, hPx * 0.18),
+                                        borderRadius: '999px',
+                                        background: groundShadowCol
+                                    }}
+                                />
+                                {carSvg}
+                            </div>
+                        ) : (
+                            /* 3D 視角模式：維持原本直立於車道方向之半透明紙片車（不面向鏡頭） */
+                            <>
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        left: -(wPx * 0.88) / 2,
+                                        top: -(wPx * 0.22) / 2,
+                                        width: wPx * 0.88,
+                                        height: wPx * 0.22,
+                                        borderRadius: '999px',
+                                        background: groundShadowCol,
+                                        transform: 'translateZ(0.2px)'
+                                    }}
+                                />
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        left: -wPx / 2,
+                                        top: -hPx,
+                                        width: wPx,
+                                        height: hPx,
+                                        transformOrigin: '50% 100%',
+                                        transform: 'rotateX(-90deg)',
+                                        transformStyle: 'preserve-3d',
+                                        backfaceVisibility: 'visible'
+                                    }}
+                                >
+                                    {carSvg}
+                                </div>
+                            </>
+                        )}
                     </div>
                 );
             })}
@@ -297,44 +368,60 @@ const RoadVehicles3D = React.memo(({ lanes, scale, w, d, isDarkMode }) => {
     );
 });
 
-// 道路兩側 2.5D 行道樹組件（具備三種樹形變化與三種綠色色階，立牌式 2.5D 建築景觀插畫樹，自動面向鏡頭直立呈現）
-const StreetTrees3D = React.memo(({ trees, scale, isDarkMode, rotationZ = 0, viewAngleX = 60 }) => {
+// 道路兩側 2.5D 行道樹組件（具備三種樹形變化與三種綠色色階；AO 模式下自動切換為建築白模灰階樹冠）
+const StreetTrees3D = React.memo(({ trees, scale, isDarkMode, rotationZ = 0, viewAngleX = 60, aoMode = false, aoNight = false }) => {
     if (!Array.isArray(trees) || trees.length === 0) return null;
 
     const baseTreeW = Math.max(18, 3.8 * scale);
     const baseTreeH = baseTreeW * 1.35;
 
-    const shadowFill = isDarkMode ? 'rgba(15, 23, 42, 0.38)' : 'rgba(30, 41, 59, 0.18)';
-    const trunkStroke = isDarkMode ? '#a18065' : '#6b4f3a';
+    const shadowFill = aoMode
+        ? (aoNight ? 'rgba(0, 0, 0, 0.55)' : 'rgba(15, 23, 42, 0.28)')
+        : (isDarkMode ? 'rgba(15, 23, 42, 0.38)' : 'rgba(30, 41, 59, 0.18)');
+    const trunkStroke = aoMode
+        ? (aoNight ? '#3f4552' : '#525866')
+        : (isDarkMode ? '#a18065' : '#6b4f3a');
 
-    // 三種綠意色階（0: 深翠綠階、1: 中草綠階、2: 淺嫩青檸綠階）
-    const colorTiers = isDarkMode
+    // 視覺降噪：白模與一般模式均採低飽和灰綠／暖白樹冠，襯托建築主量體
+    const colorTiers = aoMode
+        ? (aoNight
+            ? [
+                { back: 'rgba(56, 60, 68, 0.85)', main: 'rgba(86, 92, 102, 0.88)', light: 'rgba(128, 134, 146, 0.90)', stroke: 'rgba(20, 22, 26, 0.78)' },
+                { back: 'rgba(50, 54, 62, 0.85)', main: 'rgba(78, 84, 94, 0.88)', light: 'rgba(118, 124, 136, 0.90)', stroke: 'rgba(20, 22, 26, 0.78)' },
+                { back: 'rgba(60, 64, 72, 0.85)', main: 'rgba(94, 100, 110, 0.88)', light: 'rgba(136, 142, 154, 0.90)', stroke: 'rgba(20, 22, 26, 0.78)' }
+            ]
+            : [
+                { back: 'rgba(182, 190, 182, 0.84)', main: 'rgba(208, 215, 208, 0.88)', light: 'rgba(234, 238, 234, 0.92)', stroke: 'rgba(72, 78, 72, 0.45)' },
+                { back: 'rgba(174, 182, 175, 0.84)', main: 'rgba(200, 208, 201, 0.88)', light: 'rgba(228, 233, 228, 0.92)', stroke: 'rgba(72, 78, 72, 0.45)' },
+                { back: 'rgba(190, 196, 190, 0.84)', main: 'rgba(218, 223, 218, 0.88)', light: 'rgba(240, 243, 240, 0.92)', stroke: 'rgba(72, 78, 72, 0.45)' }
+            ])
+        : (isDarkMode
         ? [
             {
-                back: 'rgba(4, 120, 87, 0.68)',
-                main: 'rgba(16, 185, 129, 0.74)',
-                light: 'rgba(52, 211, 153, 0.72)',
-                stroke: 'rgba(167, 243, 208, 0.78)'
+                back: 'rgba(92, 104, 96, 0.62)',
+                main: 'rgba(118, 132, 122, 0.68)',
+                light: 'rgba(150, 164, 154, 0.70)',
+                stroke: 'rgba(190, 200, 192, 0.50)'
             },
             {
-                back: 'rgba(21, 128, 61, 0.66)',
-                main: 'rgba(34, 197, 94, 0.72)',
-                light: 'rgba(134, 239, 172, 0.72)',
-                stroke: 'rgba(220, 252, 231, 0.78)'
+                back: 'rgba(84, 96, 88, 0.60)',
+                main: 'rgba(110, 124, 114, 0.66)',
+                light: 'rgba(142, 156, 146, 0.68)',
+                stroke: 'rgba(184, 194, 186, 0.48)'
             },
             {
-                back: 'rgba(77, 124, 15, 0.66)',
-                main: 'rgba(132, 204, 22, 0.72)',
-                light: 'rgba(190, 242, 100, 0.74)',
-                stroke: 'rgba(236, 252, 203, 0.78)'
+                back: 'rgba(100, 110, 100, 0.60)',
+                main: 'rgba(126, 138, 126, 0.66)',
+                light: 'rgba(158, 168, 158, 0.68)',
+                stroke: 'rgba(196, 204, 196, 0.48)'
             }
         ]
         : [
             {
-                back: 'rgba(6, 95, 70, 0.68)',
-                main: 'rgba(5, 150, 105, 0.74)',
-                light: 'rgba(52, 211, 153, 0.76)',
-                stroke: 'rgba(6, 78, 59, 0.75)'
+                back: 'rgba(146, 160, 148, 0.68)',
+                main: 'rgba(176, 189, 178, 0.74)',
+                light: 'rgba(208, 218, 209, 0.78)',
+                stroke: 'rgba(84, 96, 86, 0.48)'
             },
             {
                 back: 'rgba(22, 101, 52, 0.66)',
@@ -348,7 +435,7 @@ const StreetTrees3D = React.memo(({ trees, scale, isDarkMode, rotationZ = 0, vie
                 light: 'rgba(163, 230, 53, 0.76)',
                 stroke: 'rgba(54, 83, 20, 0.75)'
             }
-        ];
+        ]);
 
     const renderTreeShape = (shapeType, palette) => {
         if (shapeType === 1) {
@@ -465,8 +552,8 @@ const StreetTrees3D = React.memo(({ trees, scale, isDarkMode, rotationZ = 0, vie
     );
 });
 
-// 臨道路退縮人行道與虛擬人行道 2.5D 半透明行人漫步動畫組件（抵達盡頭直接消失不縮放，旋轉視角或點選畫面絕不重置動畫）
-const Pedestrians3D = React.memo(({ paths, scale, isDarkMode, rotationZ = 0, viewAngleX = 60 }) => {
+// 臨道路退縮人行道與虛擬人行道 2.5D 半透明行人漫步動畫組件（抵達道路兩端盡頭平滑消失，旋轉視角或點選畫面絕不重置動畫）
+const Pedestrians3D = React.memo(({ paths, scale, isDarkMode, rotationZ = 0, viewAngleX = 60, aoMode = false, aoNight = false }) => {
     const walkerRefs = useRef([]);
     const leftLegRefs = useRef([]);
     const rightLegRefs = useRef([]);
@@ -493,20 +580,24 @@ const Pedestrians3D = React.memo(({ paths, scale, isDarkMode, rotationZ = 0, vie
     const preparedWalkers = useMemo(() => {
         if (!pathsSignature) return [];
         const list = [];
-        // 半透明人物大衣色盤
-        const coatPalette = isDarkMode
-            ? [
-                'rgba(226, 232, 240, 0.56)',
-                'rgba(148, 163, 184, 0.56)',
-                'rgba(129, 140, 248, 0.56)',
-                'rgba(56, 189, 248, 0.56)'
-            ]
-            : [
-                'rgba(71, 85, 105, 0.56)',
-                'rgba(100, 116, 139, 0.56)',
-                'rgba(79, 70, 229, 0.54)',
-                'rgba(15, 118, 110, 0.54)'
-            ];
+        // 半透明人物大衣色盤（AO 模式下轉為簡約建築模型黑白灰剪影）
+        const coatPalette = aoMode
+            ? (aoNight
+                ? ['rgba(203, 213, 225, 0.72)', 'rgba(148, 163, 184, 0.68)', 'rgba(100, 116, 139, 0.72)', 'rgba(226, 232, 240, 0.65)']
+                : ['rgba(30, 41, 59, 0.76)', 'rgba(51, 65, 85, 0.72)', 'rgba(71, 85, 105, 0.72)', 'rgba(15, 23, 42, 0.78)'])
+            : (isDarkMode
+                ? [
+                    'rgba(226, 232, 240, 0.56)',
+                    'rgba(148, 163, 184, 0.56)',
+                    'rgba(129, 140, 248, 0.56)',
+                    'rgba(56, 189, 248, 0.56)'
+                ]
+                : [
+                    'rgba(71, 85, 105, 0.56)',
+                    'rgba(100, 116, 139, 0.56)',
+                    'rgba(79, 70, 229, 0.54)',
+                    'rgba(15, 118, 110, 0.54)'
+                ]);
 
         (paths || []).forEach((pathPts, pIdx) => {
             if (!pathPts || pathPts.length < 2) return;
@@ -523,8 +614,10 @@ const Pedestrians3D = React.memo(({ paths, scale, isDarkMode, rotationZ = 0, vie
             }
             if (totalLen < 5) return;
 
-            const walkerCount = Math.max(1, Math.min(3, Math.round(totalLen / 22)));
-            const cycleLen = totalLen + Math.max(6, totalLen * 0.22);
+            // 視覺降噪：僅保留 1 個比例參考用人形（約 1.7m），避免多個行人分散注意力
+            if (list.length >= 1) return;
+            const walkerCount = 1;
+            const cycleLen = totalLen + Math.max(18, totalLen * 0.25);
             for (let wIdx = 0; wIdx < walkerCount; wIdx++) {
                 const reverseDir = (wIdx + pIdx) % 2 === 1;
                 const orderedPts = reverseDir ? [...pathPts].reverse() : pathPts;
@@ -556,7 +649,7 @@ const Pedestrians3D = React.memo(({ paths, scale, isDarkMode, rotationZ = 0, vie
             }
         });
         return list;
-    }, [pathsSignature, isDarkMode]);
+    }, [pathsSignature, isDarkMode, aoMode, aoNight]);
 
     useEffect(() => {
         if (preparedWalkers.length === 0) return;
@@ -577,13 +670,26 @@ const Pedestrians3D = React.memo(({ paths, scale, isDarkMode, rotationZ = 0, vie
                 if (!el) return;
 
                 const dist = ((elapsedSec * w.speed) + w.phaseOffset * w.cycleLen) % w.cycleLen;
-                // 抵達人行道盡頭直接消失，不使用縮小過渡
+                // 抵達道路兩端盡頭時以淡出 (Fade-out) 效果平滑消失
                 if (dist > w.totalLen) {
+                    el.style.opacity = '0';
                     el.style.visibility = 'hidden';
                     el.style.transform = 'translate3d(0px, 0px, -9999px)';
                     return;
                 }
-                el.style.visibility = 'visible';
+
+                const fadeOutDist = Math.min(12, Math.max(5, w.totalLen * 0.12));
+                const fadeInDist = Math.min(6, Math.max(2.5, w.totalLen * 0.06));
+                let alpha = 1;
+                if (dist > w.totalLen - fadeOutDist) {
+                    const tOut = Math.max(0, Math.min(1, (w.totalLen - dist) / Math.max(1e-6, fadeOutDist)));
+                    alpha = tOut * tOut * (3 - 2 * tOut);
+                } else if (dist < fadeInDist) {
+                    const tIn = Math.max(0, Math.min(1, dist / Math.max(1e-6, fadeInDist)));
+                    alpha = tIn * tIn * (3 - 2 * tIn);
+                }
+                el.style.visibility = alpha <= 0.005 ? 'hidden' : 'visible';
+                el.style.opacity = alpha.toFixed(3);
 
                 let segIdx = 0;
                 for (let i = 0; i < w.cumLengths.length - 1; i++) {
@@ -712,7 +818,7 @@ const Pedestrians3D = React.memo(({ paths, scale, isDarkMode, rotationZ = 0, vie
     );
 });
 
-const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectInputs, inputs: inputsProp, res, siteResults, aggregateResults, onUpdateBaseDim, onUpdateSiteSetting, onUpdateRoads, onUpdateInputs, showCheckLines, setShowCheckLines, showHeightRatio, setShowHeightRatio, showWeiLao, setShowWeiLao, showBackyard, setShowBackyard, isConstraintMode, setIsConstraintMode, onUnusedAreaChange, placementMode, placementOffset, setPlacementOffset, onConfirmPlacement, setActiveSiteIndex, showSummaryPanel, setShowSummaryPanel, showEnvPanel, setShowEnvPanel }) => {
+const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectInputs, inputs: inputsProp, res, siteResults, aggregateResults, onUpdateBaseDim, onUpdateSiteSetting, onUpdateRoads, onUpdateInputs, showCheckLines, setShowCheckLines, showHeightRatio, setShowHeightRatio, showWeiLao, setShowWeiLao, showBackyard, setShowBackyard, isConstraintMode, setIsConstraintMode, onUnusedAreaChange, onMassingSummaryChange, onEditStateChange, appActions, placementMode, placementOffset, setPlacementOffset, onConfirmPlacement, setActiveSiteIndex, showSummaryPanel, setShowSummaryPanel, showEnvPanel, setShowEnvPanel, onCreateDrawnSite, externalDrawSiteMode, setExternalDrawSiteMode }) => {
     const activeSite = useMemo(() => (sites || []).find(s => s.id === activeSiteId) || (sites || [])[0] || {}, [sites, activeSiteId]);
     const inputs = inputsProp || activeSite.inputs || {};
     const basePoints = activeSite.basePoints || activeSite.baseGeometry?.points;
@@ -875,33 +981,79 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
     }, [basePoints, baseCurves, inputs.excavationRatio]);
 
     useEffect(() => {
-        const bw = parseFloat(inputs.baseWidthM);
-        const bd = parseFloat(inputs.baseDepthM);
-        if (bw > 0 && bd > 0) {
-            const newScale3d = Math.min(600 / bw, 600 / bd);
-            const currentScale3d = parseFloat(inputs.scale3d);
-            if (isNaN(currentScale3d) || Math.abs(currentScale3d - newScale3d) > 0.001) {
-                onUpdateInputs('scale3d', parseFloat(newScale3d.toFixed(4)));
-            }
+        const bw = parseFloat(inputs.baseWidthM) || getSiteDefaultDims(activeSite).w;
+        const bd = parseFloat(inputs.baseDepthM) || getSiteDefaultDims(activeSite).d;
+        const currentScale3d = parseFloat(inputs.scale3d);
+        if ((isNaN(currentScale3d) || currentScale3d <= 0) && bw > 0 && bd > 0) {
+            const newScale3d = Math.min(280 / bw, 280 / bd);
+            onUpdateInputs('scale3d', parseFloat(newScale3d.toFixed(4)));
         }
-    }, [inputs.baseWidthM, inputs.baseDepthM]);
+    }, [activeSiteId, inputs.baseWidthM, inputs.baseDepthM, inputs.scale3d]);
 
     const toggleConstraints = () => { setIsConstraintMode(!isConstraintMode); if (!isConstraintMode) setShowCheckLines(true); };
     const [rotationZ, setRotationZ] = useState(-45);
     const [viewAngleX, setViewAngleX] = useState(58);
+    // 建築白模 AO 視覺模式與太陽軌跡狀態（開啟太陽軌跡時自動切換至 AO 模式，夜間自動進入基地聚光夜景 AO）
+    // 預設啟用白模 + 柔和陰影 + 環境光遮蔽（AO），線框改為檢討模式切換
+    const [aoMode, setAoMode] = useState(true);
+    const [sunPathOpen, setSunPathOpen] = useState(false);
+    const [sunCompareOpen, setSunCompareOpen] = useState(false);
+    const [sunTime, setSunTime] = useState(10.5);
+    const [sunSeason, setSunSeason] = useState('summer');
+    const [isSunPlaying, setIsSunPlaying] = useState(false);
+    // 結束樓層編輯時，若偵測到超出基地/退縮限制範圍，跳出非阻斷詢問是否自動切除並往上填補樓層
+    const [overflowClipPrompt, setOverflowClipPrompt] = useState(null);
+    const prevEditingFloorIdRef = useRef(null);
+    // 台灣地籍圖串接 / PDF・圖片・DXF 本機匯入工作台與 3D 畫布底圖狀態（僅存本機瀏覽器）
+    const [cadastralModalOpen, setCadastralModalOpen] = useState(false);
+    const [cadastralUnderlay, setCadastralUnderlay] = useState(null);
+    const [importedRoadPolygons, setImportedRoadPolygons] = useState([]);
+
+    useEffect(() => {
+        if (!isSunPlaying) return;
+        const timer = setInterval(() => {
+            setSunTime(prev => parseFloat(((prev + 0.08) % 24).toFixed(2)));
+        }, 40);
+        return () => clearInterval(timer);
+    }, [isSunPlaying]);
+
+    const sunState = useMemo(
+        () => computeSunState(sunTime, sunSeason, inputs.northAngle || 0),
+        [sunTime, sunSeason, inputs.northAngle]
+    );
+    const isNightAO = aoMode && sunState.isNight;
+
+    const handleToggleSunPath = () => {
+        setSunPathOpen(prev => {
+            const next = !prev;
+            if (next) {
+                setAoMode(true); // 開啟太陽軌跡時自動切換成 AO 視覺效果
+            } else {
+                setIsSunPlaying(false);
+            }
+            return next;
+        });
+    };
     const [isSettingNorth, setIsSettingNorth] = useState(false);
     const compassRef = useRef(null);
     const [zoom, setZoom] = useState(1);
     const [isDragging, setIsDragging] = useState(false);
     const lastMousePos = useRef({ x: 0, y: 0 });
+    const pointerDownScreenPosRef = useRef({ x: 0, y: 0 });
     const lastPinchDist = useRef(null);
     const lastTouchCenter = useRef(null);
     const dragModeRef = useRef(null);
     const viewportRef = useRef(null);
     const [isMobile, setIsMobile] = useState(false);
+    const [isCompactLandscape, setIsCompactLandscape] = useState(false);
+    const [mobileActiveTab, setMobileActiveTab] = useState('summary');
+    const [mobileSheetHeight, setMobileSheetHeight] = useState('peek');
+    const [viewportInsets, setViewportInsets] = useState({ top: 52, right: 12, bottom: 168, left: 12 });
     const [isSummaryOpen, setIsSummaryOpen] = useState(true);
     const [isProjectSummaryVisible, setIsProjectSummaryVisible] = useState(true);
-    const isLandscapeMode = isMobile && !isSummaryOpen;
+    // 任務 1：徹底停用強制 90° 旋轉模式，全面改為原生方向配置
+    const isLandscapeMode = false;
+    const isMobileLayout = isMobile || isCompactLandscape;
     const rafRef = useRef(null);
 
     // Helper: 取得 site 的 basePoints（相容兩種資料結構）
@@ -911,7 +1063,7 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         const sPts = getSiteBasePoints(site);
         const sCurves = getSiteBaseCurves(site);
         return sPts
-            ? normalizeWithCurves(sPts, sCurves)
+            ? { points: sPts, curves: sCurves || null, centroid: { x: 0, y: 0 } }
             : { points: getSiteDefaultRect(site), curves: null, centroid: { x: 0, y: 0 } };
     };
     const getSiteRoads = (site) => {
@@ -1003,12 +1155,14 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
     
     const projectBounds = useMemo(() => {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let sumLayoutX = 0, sumLayoutY = 0, layoutCount = 0;
         const safeSites = sites || [];
         safeSites.forEach(site => {
             const layout = siteLayouts.get(site.id) || { x: 0, y: 0, rotation: 0 };
-            const pts = getSiteBasePoints(site);
-            const curves = getSiteBaseCurves(site);
-            const normalized = pts ? normalizeWithCurves(pts, curves) : { points: getSiteDefaultRect(site), curves: null, centroid: {x:0, y:0} };
+            sumLayoutX += layout.x || 0;
+            sumLayoutY += layout.y || 0;
+            layoutCount += 1;
+            const normalized = getSiteNormalizedData(site);
             if (normalized && normalized.points) {
                 normalized.points.forEach(p => {
                     const cos = Math.cos(layout.rotation);
@@ -1022,12 +1176,16 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                 });
             }
         });
-        if (minX === Infinity) return { minX: -20, minY: -20, maxX: 20, maxY: 20, center: {x:0, y:0}, width: 40, depth: 40 };
+        if (minX === Infinity) return { minX: -20, minY: -20, maxX: 20, maxY: 20, center: { x: 0, y: 0 }, width: 40, depth: 40 };
+        // 以基地配置基準點 (layout) 作為場景中心，避免拖曳單一頂點時整個場景中心跟著偏移
+        const stableCenter = layoutCount > 0
+            ? { x: sumLayoutX / layoutCount, y: sumLayoutY / layoutCount }
+            : { x: 0, y: 0 };
         return {
             minX, minY, maxX, maxY,
-            center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
-            width: maxX - minX,
-            depth: maxY - minY
+            center: stableCenter,
+            width: Math.max(40, maxX - minX),
+            depth: Math.max(40, maxY - minY)
         };
     }, [sites, siteLayouts]);
 
@@ -1052,11 +1210,7 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
             const siteResult = siteResultItem?.finalRes || siteResultItem?.results || (activeSiteId === site.id ? res : null);
             if (!siteResult) return null;
 
-            const siteBasePoints = getSiteBasePoints(site);
-            const siteBaseCurves = getSiteBaseCurves(site);
-            const normalized = siteBasePoints 
-                ? normalizeWithCurves(siteBasePoints, siteBaseCurves)
-                : { points: getSiteDefaultRect(site), curves: null, centroid: {x:0,y:0} };
+            const normalized = getSiteNormalizedData(site);
             
             const layout = siteLayouts.get(site.id) || { x: 0, y: 0, rotation: 0 };
             
@@ -1187,7 +1341,39 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         return buildMassingLayers(siteRes, site, normalizedData, siteEffectiveFrontIndices, siteCombinedEdgeTypes, targetFAbove);
     }
 
-    useEffect(() => { const checkMobile = () => setIsMobile(window.innerWidth < 768); checkMobile(); window.addEventListener('resize', checkMobile); return () => window.removeEventListener('resize', checkMobile); }, []);
+    useEffect(() => {
+        const checkViewport = () => {
+            const wWin = window.innerWidth;
+            const hWin = window.innerHeight;
+            const compactLand = wWin > hWin && hWin <= 500;
+            setIsCompactLandscape(compactLand);
+            setIsMobile(wWin < 768 && !compactLand);
+        };
+        checkViewport();
+        window.addEventListener('resize', checkViewport);
+        return () => window.removeEventListener('resize', checkViewport);
+    }, []);
+
+    // 任務 5：3D 相機自動取景（fit to frame），面板高度或螢幕方向變動時將建築量體置於可視區中央並佔寬 60–70%
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const winW = window.innerWidth;
+        const winH = window.innerHeight;
+        const insets = isMobileLayout
+            ? viewportInsets
+            : { top: 68, left: 328, right: 24, bottom: 24 };
+        const visW = Math.max(160, winW - insets.left - insets.right);
+        const visH = Math.max(160, winH - insets.top - insets.bottom);
+        const targetOffsetX = Math.round((insets.left - insets.right) / 2);
+        const targetOffsetY = Math.round((insets.top - insets.bottom) / 2);
+        // 建築量體寬度約為 w * 0.85，計算讓量體佔可視區寬度約 64% 且不超出可視高度的縮放比
+        const approxMassPx = Math.max(140, Math.min(340, w || 220));
+        const fitZoomW = (visW * 0.64) / approxMassPx;
+        const fitZoomH = (visH * 0.58) / approxMassPx;
+        const nextZoom = Math.max(0.55, Math.min(1.25, Math.min(fitZoomW, fitZoomH)));
+        setPanOffset({ x: targetOffsetX, y: targetOffsetY });
+        setZoom(Number(nextZoom.toFixed(2)));
+    }, [isMobileLayout, viewportInsets, w]);
     useEffect(() => { if (isMobile) { setIsSummaryOpen(false); setIsProjectSummaryVisible(true); } }, [isMobile]);
     useEffect(() => { setAnimate(true); const timer = setTimeout(() => setAnimate(false), 1000); return () => clearTimeout(timer); }, [res.floorsAbove]);
 
@@ -1215,13 +1401,26 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
 
     const getTouchDistance = (touches) => Math.hypot(touches[0].pageX - touches[1].pageX, touches[0].pageY - touches[1].pageY);
     const getTouchCenter = (touches) => ({ x: (touches[0].clientX + touches[1].clientX) / 2, y: (touches[0].clientY + touches[1].clientY) / 2 });
+    const [primaryDragMode, setPrimaryDragMode] = useState('rotate');
+    const saved3DAngleRef = useRef({ viewAngleX: 58, rotationZ: -45 });
+    const handleToggleTopDownView = () => {
+        if (viewAngleX <= 5) {
+            setViewAngleX(saved3DAngleRef.current.viewAngleX || 58);
+            setRotationZ(saved3DAngleRef.current.rotationZ ?? -45);
+        } else {
+            saved3DAngleRef.current = { viewAngleX, rotationZ };
+            setViewAngleX(0);
+            setRotationZ(0);
+        }
+    };
     const handleMouseDown = (e) => {
-        if (viewMode === '2d') return;
+        if (e.target?.closest?.('[data-type]') || e.target?.closest?.('.no-context-menu')) return;
+        pointerDownScreenPosRef.current = { x: e.clientX, y: e.clientY };
         if (e.button === 1) {
             e.preventDefault();
-            dragModeRef.current = 'rotate';
+            dragModeRef.current = primaryDragMode === 'rotate' ? 'pan' : 'rotate';
         } else if (e.button === 0) {
-            dragModeRef.current = 'pan';
+            dragModeRef.current = e.shiftKey ? (primaryDragMode === 'rotate' ? 'pan' : 'rotate') : primaryDragMode;
         } else {
             return;
         }
@@ -1235,14 +1434,15 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         const cy = rect.top + rect.height / 2;
         const dx = e.clientX - cx;
         const dy = e.clientY - cy;
-        let angle = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
-        if (angle < 0) angle += 360;
-        onUpdateInputs('northAngle', parseFloat(angle.toFixed(1)));
+        let screenAngle = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
+        if (screenAngle < 0) screenAngle += 360;
+        // 讓指南針箭頭直接對準滑鼠方向，同時畫面視角完全保持不動
+        const nextNorth = (((rotationZ - screenAngle) % 360) + 360) % 360;
+        onUpdateInputs('northAngle', parseFloat(nextNorth.toFixed(1)));
     };
     const handleCompassPointerDown = (e) => {
         e.stopPropagation();
         if (e.currentTarget?.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
-        setViewAngleX(90);
         setIsSettingNorth(true);
         updateNorthFromEvent(e);
     };
@@ -1252,21 +1452,19 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         updateNorthFromEvent(e);
     };
     const handleCompassPointerUp = (e) => {
+        e.stopPropagation();
         if (e.currentTarget?.releasePointerCapture) e.currentTarget.releasePointerCapture(e.pointerId);
         setIsSettingNorth(false);
     };
     const handleTouchStart = (e) => {
-        if (viewMode === '2d') {
-            if (e.touches.length === 2) { lastPinchDist.current = getTouchDistance(e.touches); }
-            return;
-        }
         if (e.touches.length === 2) {
             lastPinchDist.current = getTouchDistance(e.touches);
             lastTouchCenter.current = getTouchCenter(e.touches);
             dragModeRef.current = 'pan';
             setIsDragging(true);
         } else if (e.touches.length === 1) {
-            dragModeRef.current = 'rotate';
+            if (e.target.closest?.('[data-type]') || e.target.closest?.('.no-context-menu')) return;
+            dragModeRef.current = primaryDragMode || 'rotate';
             setIsDragging(true);
             lastMousePos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         }
@@ -1572,40 +1770,48 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         const deltaY = e.clientY - lastMousePos.current.y;
         let effectiveDeltaX = isLandscapeMode ? deltaY : deltaX;
         let effectiveDeltaY = isLandscapeMode ? -deltaX : deltaY;
-        if (dragModeRef.current === 'rotate') {
-            setRotationZ(prev => prev + effectiveDeltaX * 0.5);
-            setViewAngleX(prev => Math.min(85, Math.max(10, prev - effectiveDeltaY * 0.5)));
-        } else if (dragModeRef.current === 'pan') {
-            setPanOffset(prev => ({ x: prev.x + effectiveDeltaX, y: prev.y + effectiveDeltaY }));
-        }
-        lastMousePos.current = { x: e.clientX, y: e.clientY };
-    };
-    const handleTouchMove = (e) => {
-        if (e.touches.length === 2 && lastPinchDist.current !== null) {
-            const currentDist = getTouchDistance(e.touches);
-            const currentCenter = getTouchCenter(e.touches);
-            const delta = currentDist - lastPinchDist.current;
-            if (viewMode === '2d') {
-                setView2D(v => ({ ...v, k: Math.min(5, Math.max(0.5, v.k + delta * 0.005)) }));
-            } else if (Math.abs(delta) > 1.5) {
-                setZoom(prev => Math.min(3, Math.max(0.2, prev + delta * 0.005)));
-            }
-            if (lastTouchCenter.current) {
-                const dX = currentCenter.x - lastTouchCenter.current.x;
-                const dY = currentCenter.y - lastTouchCenter.current.y;
-                let effectiveDeltaX = isLandscapeMode ? dY : dX;
-                let effectiveDeltaY = isLandscapeMode ? -dX : dY;
-                setPanOffset(prev => ({ x: prev.x + effectiveDeltaX, y: prev.y + effectiveDeltaY }));
-            }
-            lastPinchDist.current = currentDist;
-            lastTouchCenter.current = currentCenter;
-            return;
-        }
-        if (!isDragging || e.touches.length !== 1) return;
-        if (rafRef.current) return;
+                if (dragModeRef.current === 'rotate') {
+                    setRotationZ(prev => prev + effectiveDeltaX * 0.5);
+                    setViewAngleX(prev => Math.min(85, Math.max(0, prev - effectiveDeltaY * 0.5)));
+                } else if (dragModeRef.current === 'pan') {
+                    setPanOffset(prev => ({ x: prev.x + effectiveDeltaX, y: prev.y + effectiveDeltaY }));
+                }
+                lastMousePos.current = { x: e.clientX, y: e.clientY };
+            };
+            const handleTouchMove = (e) => {
+                if (e.touches.length === 2 && lastPinchDist.current !== null) {
+                    const currentDist = getTouchDistance(e.touches);
+                    const currentCenter = getTouchCenter(e.touches);
+                    const delta = currentDist - lastPinchDist.current;
+                    if (Math.abs(delta) > 1.5) {
+                        setZoom(prev => Math.min(3, Math.max(0.2, prev + delta * 0.005)));
+                    }
+                    if (lastTouchCenter.current) {
+                        const dX = currentCenter.x - lastTouchCenter.current.x;
+                        const dY = currentCenter.y - lastTouchCenter.current.y;
+                        let effectiveDeltaX = isLandscapeMode ? dY : dX;
+                        let effectiveDeltaY = isLandscapeMode ? -dX : dY;
+                        setPanOffset(prev => ({ x: prev.x + effectiveDeltaX, y: prev.y + effectiveDeltaY }));
+                    }
+                    lastPinchDist.current = currentDist;
+                    lastTouchCenter.current = currentCenter;
+                    return;
+                }
+                if (!isDragging || e.touches.length !== 1) return;
+                if (rafRef.current) return;
                 const clientX = e.touches[0].clientX; const clientY = e.touches[0].clientY;
                 rafRef.current = requestAnimationFrame(() => {
-                    const deltaX = clientX - lastMousePos.current.x; const deltaY = clientY - lastMousePos.current.y; let effectiveDeltaX = isLandscapeMode ? deltaY : deltaX; let effectiveDeltaY = isLandscapeMode ? -deltaX : deltaY; setRotationZ(prev => prev + effectiveDeltaX * 0.5); setViewAngleX(prev => Math.min(85, Math.max(10, prev - effectiveDeltaY * 0.5))); lastMousePos.current = { x: clientX, y: clientY }; rafRef.current = null;
+                    const deltaX = clientX - lastMousePos.current.x; const deltaY = clientY - lastMousePos.current.y;
+                    let effectiveDeltaX = isLandscapeMode ? deltaY : deltaX;
+                    let effectiveDeltaY = isLandscapeMode ? -deltaX : deltaY;
+                    if (primaryDragMode === 'pan') {
+                        setPanOffset(prev => ({ x: prev.x + effectiveDeltaX, y: prev.y + effectiveDeltaY }));
+                    } else {
+                        setRotationZ(prev => prev + effectiveDeltaX * 0.5);
+                        setViewAngleX(prev => Math.min(85, Math.max(0, prev - effectiveDeltaY * 0.5)));
+                    }
+                    lastMousePos.current = { x: clientX, y: clientY };
+                    rafRef.current = null;
                 });
             };
             const handleMouseUp = () => { setIsDragging(false); lastPinchDist.current = null; lastTouchCenter.current = null; dragModeRef.current = null; };
@@ -1812,79 +2018,25 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
             };
 
             const handleBaseEditEnd = (floorId, points) => {
-                if (floorId === 'base' && points) {
-                    const normalized = normalizeWithCurves(points, baseCurves);
-                    if (normalized.points) {
-                        setBasePoints(normalized.points);
-                        setBaseCurves(normalized.curves);
-                    }
-                    const shift = normalized.centroid || { x: 0, y: 0 };
-                    if (Math.abs(shift.x) > 0.0001 || Math.abs(shift.y) > 0.0001) {
-                        setFloorSettings(prev => {
-                            const next = { ...prev };
-                            let changed = false;
-                            Object.keys(next).forEach(k => {
-                                if (k === 'base') return;
-                                const cur = next[k];
-                                if (!cur) return;
-                                let updated = null;
-                                if (cur.points && cur.points.length > 0) {
-                                    const shiftedPoints = cur.points.map(p => ({ x: p.x - shift.x, y: p.y - shift.y }));
-                                    updated = { ...(updated || cur), points: shiftedPoints };
-                                }
-                                if (cur.splitBasePoints && cur.splitBasePoints.length > 0) {
-                                    const shiftedSplitBase = cur.splitBasePoints.map(p => ({ x: p.x - shift.x, y: p.y - shift.y }));
-                                    updated = { ...(updated || cur), splitBasePoints: shiftedSplitBase };
-                                }
-                                if (cur.units && cur.units.length > 0) {
-                                    const shiftedUnits = cur.units.map(uPts => uPts.map(p => ({ x: p.x - shift.x, y: p.y - shift.y })));
-                                    updated = { ...(updated || cur), units: shiftedUnits };
-                                }
-                                if (cur.curves) {
-                                    const shiftedCurves = {};
-                                    Object.keys(cur.curves).forEach(idx => {
-                                        const cp = cur.curves[idx];
-                                        shiftedCurves[idx] = { x: cp.x - shift.x, y: cp.y - shift.y };
-                                    });
-                                    updated = { ...(updated || cur), curves: shiftedCurves };
-                                }
-                                if (updated) {
-                                    next[k] = updated;
-                                    changed = true;
-                                }
-                            });
-                            return changed ? next : prev;
-                        });
-                        setExcavationPoints(prev => {
-                            if (!prev || prev.length === 0) return prev;
-                            return prev.map(p => ({ x: p.x - shift.x, y: p.y - shift.y }));
-                        });
-                        setExcavationCurves(prev => {
-                            if (!prev) return prev;
-                            const next = {};
-                            Object.keys(prev).forEach(k => {
-                                const cp = prev[k];
-                                next[k] = { x: cp.x - shift.x, y: cp.y - shift.y };
-                            });
-                            return next;
-                        });
-                    }
+                if (floorId === 'base' && points && points.length >= 3) {
+                    setBasePoints(points);
                     const area = calculatePolygonArea(points, baseCurves);
                     const currentArea = parseFloat(inputs.baseArea || 0);
                     if (Math.abs(area - currentArea) > 0.01) {
                         onUpdateBaseDim('baseArea', parseFloat(area.toFixed(2)));
                     }
-                    const xs = points.map(p => p.x); const w = Math.max(...xs) - Math.min(...xs);
+                    const xs = points.map(p => p.x);
+                    const bw = Math.max(...xs) - Math.min(...xs);
                     const currentW = parseFloat(inputs.baseWidth || 0);
-                    if (Math.abs(w - currentW) > 0.01) {
-                        onUpdateInputs('baseWidth', parseFloat(w.toFixed(2)));
+                    if (Math.abs(bw - currentW) > 0.01) {
+                        onUpdateInputs('baseWidth', parseFloat(bw.toFixed(2)));
                     }
                     const bounds = getPolygonBounds(points);
                     if (bounds) {
-                        const baseWidthM = bounds.maxX - bounds.minX;
-                        const baseDepthM = bounds.maxY - bounds.minY;
-                        onUpdateInputs('baseWidthM', parseFloat(baseWidthM.toFixed(2)));
-                        onUpdateInputs('baseDepthM', parseFloat(baseDepthM.toFixed(2)));
+                        const baseWidthMVal = bounds.maxX - bounds.minX;
+                        const baseDepthMVal = bounds.maxY - bounds.minY;
+                        onUpdateInputs('baseWidthM', parseFloat(baseWidthMVal.toFixed(2)));
+                        onUpdateInputs('baseDepthM', parseFloat(baseDepthMVal.toFixed(2)));
                     }
                 }
             };
@@ -2072,7 +2224,7 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
             const pts = [{ x: -hw, y: -hd }, { x: hw, y: -hd }, { x: hw, y: hd }, { x: -hw, y: hd }];
             return { points: pts, curves: null, centroid: { x: 0, y: 0 } };
         }
-        return normalizeWithCurves(basePoints, baseCurves);
+        return { points: basePoints, curves: baseCurves || null, centroid: { x: 0, y: 0 } };
     }, [basePoints, baseCurves, baseWidthM, baseDepthM]);
 
     // 樓層量體生成邏輯 (Massing generation logic - Refactored for multi-site)
@@ -2142,7 +2294,8 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
             if (remainingAreaM2 <= 0.1 && !isFloorConfigSet) break;
             const floorId = `${floorCount + 1}F`;
             const settings = floorSettings[floorId] || {};
-            const h = (floorCount === 0) ? (parseFloat(inputs.floorHeight1F) || 4.2) : (parseFloat(inputs.floorHeightOther) || 3.6);
+            const defaultFloorH = (floorCount === 0) ? (parseFloat(inputs.floorHeight1F) || 4.2) : (parseFloat(inputs.floorHeightOther) || 3.6);
+            const h = (parseFloat(settings.floorHeight) > 0) ? parseFloat(settings.floorHeight) : defaultFloorH;
 
             // IMPORTANT: Check constraints at the TOP of the current floor
             const checkZ = currentZM + h;
@@ -2508,8 +2661,9 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
             };
 
             // Calculate Final Geometry
-            let layerPoints = (!useRandomSizes && settings.points) ? settings.points : null;
+            let layerPoints = (!useRandomSizes && settings.points && settings.points.length >= 3) ? settings.points : null;
             let layerCurves = (!useRandomSizes && settings.curves) ? settings.curves : (layerPoints ? null : floorCurves) || null;
+            let hasCustomPolygonViolation = false;
 
             if (layerPoints && normalizedData.centroid) {
                 const c = normalizedData.centroid;
@@ -2522,13 +2676,6 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                     });
                     layerCurves = newC;
                 }
-            }
-
-            if (layerPoints && shouldClampToProjection && oneFFootprint) {
-                const fitted = fitPolygonWithin(layerPoints, layerCurves, oneFFootprint);
-                layerPoints = fitted.points;
-                layerCurves = fitted.curves;
-                usedAreaM2 = Math.min(usedAreaM2, calculatePolygonArea(layerPoints, layerCurves));
             }
 
             if (!layerPoints && floorPolygon) {
@@ -2566,23 +2713,15 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                 }
             }
 
-            // 確保所有手動編輯或套用的樓板多邊形皆嚴格受限於當前基地形狀、道路退縮與法規包絡線內
-            if (!useRandomSizes && settings.points && layerPoints && allowedPolygon) {
-                const constrained = constrainPolygonToLegalBoundary(layerPoints, layerCurves, allowedPolygon, floorCurves);
-                layerPoints = constrained.points;
-                layerCurves = constrained.curves;
-                if (layerPoints && layerPoints.length >= 3) {
-                    const curPolyArea = calculatePolygonArea(layerPoints, layerCurves);
-                    if (curPolyArea > usedAreaM2 + 0.05 && usedAreaM2 > 0) {
-                        const scaleRate = Math.sqrt(usedAreaM2 / curPolyArea);
-                        const polyCentroid = getPolygonCentroid(layerPoints);
-                        const scaled = scalePolygon(layerPoints, layerCurves, scaleRate, polyCentroid);
-                        layerPoints = scaled.points;
-                        layerCurves = scaled.curves;
-                    }
-                    usedAreaM2 = Math.min(usedAreaM2, calculatePolygonArea(layerPoints, layerCurves));
-                } else {
-                    usedAreaM2 = 0;
+            // 當使用者手動編輯樓層多邊形 (settings.points) 時，100% 保留使用者之頂點數與座標（絕不自動裁切增加編輯點或縮放破圖），僅標示是否超出退縮/建蔽上限
+            if (!useRandomSizes && settings.points && layerPoints && layerPoints.length >= 3) {
+                const curPolyArea = calculatePolygonArea(layerPoints, layerCurves);
+                usedAreaM2 = curPolyArea;
+                if (allowedPolygon && allowedPolygon.length >= 3 && !allInsidePolygon(layerPoints, allowedPolygon)) {
+                    hasCustomPolygonViolation = true;
+                }
+                if (maxFloorAreaM2 > 0 && curPolyArea > maxFloorAreaM2 + 0.5) {
+                    hasCustomPolygonViolation = true;
                 }
             }
 
@@ -2675,6 +2814,9 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
             }
 
             const violations = [];
+            if (hasCustomPolygonViolation) {
+                violations.push('超出退縮或建蔽上限');
+            }
 
             if (splitUnits && splitUnits.length > 0) {
                 // 計算各分棟包絡面積總和與比例
@@ -3031,7 +3173,34 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         if (onUnusedAreaChange) onUnusedAreaChange(unusedArea);
     }, [unusedArea, onUnusedAreaChange]);
 
+    // 同步目前 3D 量體的實際面積與樓層資訊給結果摘要面板（以數值簽章去重，避免觸發重複重渲染）
+    const lastMassingSigRef = useRef('');
     useEffect(() => {
+        if (!onMassingSummaryChange) return;
+        const aboveLayers = (massingLayers.layers || []).filter(l => /^\d+F/.test(l.id));
+        const floor1Layers = aboveLayers.filter(l => l.id === '1F' || l.id.startsWith('1F-'));
+        const actualFootprintM2 = floor1Layers.length > 0
+            ? floor1Layers.reduce((sum, l) => sum + (l.realArea || 0), 0)
+            : (aboveLayers[0]?.realArea || res.maxBuildingArea || 0);
+        const usedVol = massingLayers.currentTotalUsed || 0;
+        const totalH = massingLayers.totalHeight || 0;
+        const ptsLen = normalizedData?.points?.length || 0;
+        const sig = `${visualFloorsAbove}|${actualFootprintM2.toFixed(1)}|${usedVol.toFixed(1)}|${totalH.toFixed(1)}|${(unusedArea || 0).toFixed(1)}|${ptsLen}`;
+        if (sig === lastMassingSigRef.current) return;
+        lastMassingSigRef.current = sig;
+        onMassingSummaryChange({
+            visualFloorsAbove,
+            actualFootprintM2,
+            actualUsedVolumeM2: usedVol,
+            totalHeight: totalH,
+            unusedArea,
+            basePoints: normalizedData?.points || null
+        });
+    }, [massingLayers, visualFloorsAbove, unusedArea, res.maxBuildingArea, normalizedData, onMassingSummaryChange]);
+
+    useEffect(() => {
+        // 正在編輯圖層形狀 (`selectedFloor`) 時不主動彈出詢問，待使用者完成編輯退出 (`!selectedFloor`) 後再顯示非阻斷式懸浮提醒
+        if (selectedFloor) return;
         if (unusedArea > 0.1) {
             const key = `${Math.round(unusedArea * 10)}-${visualFloorsAbove}-${inputs.floorsBelow}-${Math.round(res.totalCFA)}`;
             if (key !== unusedPromptKey) {
@@ -3041,7 +3210,458 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         } else if (showUnusedPrompt) {
             setShowUnusedPrompt(false);
         }
-    }, [unusedArea, visualFloorsAbove, inputs.floorsBelow, res.totalCFA, unusedPromptKey, showUnusedPrompt]);
+    }, [unusedArea, visualFloorsAbove, inputs.floorsBelow, res.totalCFA, unusedPromptKey, showUnusedPrompt, selectedFloor]);
+
+    // ── 3D 透視平面精準射線求交與螢幕座標反向/正向投影 (Exact 3D Ray-Plane Intersection & Screen Projection) ──
+    const screenToSiteLocal = useMemo(() => {
+        return (clientX, clientY, planeZPx = 0) => {
+            const rect = viewportRef.current
+                ? viewportRef.current.getBoundingClientRect()
+                : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            let u = clientX - centerX;
+            let v = clientY - centerY;
+            if (isLandscapeMode) {
+                const tmp = u;
+                u = v;
+                v = -tmp;
+            }
+
+            const P = 2500; // 與 perspective: '2500px' 一致
+            const radX = (viewAngleX * Math.PI) / 180;
+            const cosX = Math.cos(radX);
+            const sinX = Math.sin(radX);
+            const safeCosX = Math.abs(cosX) < 1e-4 ? 1e-4 : cosX;
+            const safeTanX = sinX / safeCosX;
+
+            const radZ = (rotationZ * Math.PI) / 180;
+            const cosZ = Math.cos(radZ);
+            const sinZ = Math.sin(radZ);
+
+            const Z3 = (planeZPx || 0) + (focusOffset.z || 0);
+            const zScale = zoom || 1;
+
+            const k = (v * safeTanX) / (zScale * P);
+            const rhs0 = ((v - panOffset.y) / zScale) * safeTanX + Z3 / safeCosX;
+            const Z6 = rhs0 / (1 + k);
+
+            const perspInv = 1 - Z6 / P;
+            const X6 = u * perspInv;
+            const Y6 = v * perspInv;
+
+            const X4 = (X6 - panOffset.x) / zScale;
+            const Y4 = (Y6 - panOffset.y) / zScale;
+
+            const X3 = X4;
+            const Y3 = (Y4 + Z3 * sinX) / safeCosX;
+
+            const X2 = X3 * cosZ + Y3 * sinZ;
+            const Y2 = -X3 * sinZ + Y3 * cosZ;
+
+            const X1 = X2 - (focusOffset.x || 0);
+            const Y1 = Y2 - (focusOffset.y || 0);
+
+            const activeLayout = siteLayouts.get(activeSiteId) || { x: 0, y: 0, rotation: 0 };
+            const siteOffX = (activeLayout.x - projectBounds.center.x) * scale;
+            const siteOffY = (activeLayout.y - projectBounds.center.y) * scale;
+
+            const dxSite = X1 - siteOffX;
+            const dySite = Y1 - siteOffY;
+            const cosS = Math.cos(activeLayout.rotation || 0);
+            const sinS = Math.sin(activeLayout.rotation || 0);
+
+            const px = dxSite * cosS + dySite * sinS;
+            const py = -dxSite * sinS + dySite * cosS;
+
+            return {
+                x: px / scale,
+                y: py / scale,
+                worldX: projectBounds.center.x + X1 / scale,
+                worldY: projectBounds.center.y + Y1 / scale
+            };
+        };
+    }, [isLandscapeMode, viewAngleX, rotationZ, focusOffset, zoom, panOffset, siteLayouts, activeSiteId, projectBounds.center, scale]);
+
+    const projectLocalToScreen = useMemo(() => {
+        return (lx, ly, planeZPx = 0) => {
+            const activeLayout = siteLayouts.get(activeSiteId) || { x: 0, y: 0, rotation: 0 };
+            const siteOffX = (activeLayout.x - projectBounds.center.x) * scale;
+            const siteOffY = (activeLayout.y - projectBounds.center.y) * scale;
+            const cosS = Math.cos(activeLayout.rotation || 0);
+            const sinS = Math.sin(activeLayout.rotation || 0);
+
+            const px = lx * scale;
+            const py = ly * scale;
+            const X1 = siteOffX + px * cosS - py * sinS;
+            const Y1 = siteOffY + px * sinS + py * cosS;
+            const Z1 = planeZPx || 0;
+
+            const X2 = X1 + (focusOffset.x || 0);
+            const Y2 = Y1 + (focusOffset.y || 0);
+            const Z2 = Z1 + (focusOffset.z || 0);
+
+            const radZ = (rotationZ * Math.PI) / 180;
+            const cosZ = Math.cos(radZ);
+            const sinZ = Math.sin(radZ);
+            const X3 = X2 * cosZ - Y2 * sinZ;
+            const Y3 = X2 * sinZ + Y2 * cosZ;
+            const Z3 = Z2;
+
+            const radX = (viewAngleX * Math.PI) / 180;
+            const cosX = Math.cos(radX);
+            const sinX = Math.sin(radX);
+            const X4 = X3;
+            const Y4 = Y3 * cosX - Z3 * sinX;
+            const Z4 = Y3 * sinX + Z3 * cosX;
+
+            const zScale = zoom || 1;
+            const X6 = X4 * zScale + panOffset.x;
+            const Y6 = Y4 * zScale + panOffset.y;
+            const Z6 = Z4;
+
+            const P = 2500;
+            const persp = P / Math.max(100, P - Z6);
+            const offsetX = X6 * persp;
+            const offsetY = Y6 * persp;
+
+            const rect = viewportRef.current
+                ? viewportRef.current.getBoundingClientRect()
+                : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+            return {
+                offsetX,
+                offsetY,
+                clientX: rect.left + rect.width / 2 + offsetX,
+                clientY: rect.top + rect.height / 2 + offsetY
+            };
+        };
+    }, [siteLayouts, activeSiteId, projectBounds.center, scale, focusOffset, rotationZ, viewAngleX, zoom, panOffset]);
+
+    // 收集既有基地角點、邊界與道路兩側邊緣（含延伸線段與弧形道路）作為點拉線繪製時的智慧吸附目標
+    const snapCandidates = useMemo(() => {
+        const list = [{ type: 'point', pt: { x: 0, y: 0 }, label: '中心原點 (0,0)' }];
+        const activeLayout = siteLayouts.get(activeSiteId) || { x: 0, y: 0, rotation: 0 };
+        const cosInv = Math.cos(-(activeLayout.rotation || 0));
+        const sinInv = Math.sin(-(activeLayout.rotation || 0));
+
+        const worldToActiveLocal = (wx, wy) => {
+            const dx = wx - activeLayout.x;
+            const dy = wy - activeLayout.y;
+            return {
+                x: dx * cosInv - dy * sinInv,
+                y: dx * sinInv + dy * cosInv
+            };
+        };
+
+        (sites || []).forEach(s => {
+            const sLayout = siteLayouts.get(s.id) || { x: s.position?.x || 0, y: s.position?.y || 0, rotation: 0 };
+            const sNorm = getSiteNormalizedData(s);
+            const pts = sNorm.points || [];
+            if (pts.length < 3) return;
+            const cosS = Math.cos(sLayout.rotation || 0);
+            const sinS = Math.sin(sLayout.rotation || 0);
+            const toActiveLocalFromSite = (pt) => {
+                const wx = sLayout.x + (pt.x * cosS - pt.y * sinS);
+                const wy = sLayout.y + (pt.x * sinS + pt.y * cosS);
+                return worldToActiveLocal(wx, wy);
+            };
+            const localPts = pts.map(toActiveLocalFromSite);
+            localPts.forEach((lp, idx) => {
+                list.push({ type: 'point', pt: lp, label: `${s.name} 角點 #${idx + 1}` });
+                const nextLp = localPts[(idx + 1) % localPts.length];
+                list.push({ type: 'segment', p1: lp, p2: nextLp, label: `${s.name} 邊界` });
+            });
+
+            // 將該基地的道路內側路緣與對側道路邊緣（含延伸段與弧形段）納入吸附目標，讓新增基地時可直接吸附道路邊緣
+            const sCentroid = getPolygonCentroid(pts);
+            const sRoads = getSiteRoads(s);
+            sRoads.forEach(road => {
+                const rw = parseFloat(road.width) || 8;
+                const edgeIdxSet = new Set();
+                if (Array.isArray(road.edgeIndices)) road.edgeIndices.forEach(i => edgeIdxSet.add(parseInt(i, 10)));
+                if (road.edgeIndex !== undefined && road.edgeIndex !== null && road.edgeIndex !== '') edgeIdxSet.add(parseInt(road.edgeIndex, 10));
+
+                edgeIdxSet.forEach(eIdx => {
+                    if (isNaN(eIdx) || eIdx < 0 || eIdx >= pts.length) return;
+                    const p1 = pts[eIdx];
+                    const p2 = pts[(eIdx + 1) % pts.length];
+                    const ctrl = sNorm.curves?.[eIdx];
+                    const steps = ctrl ? 10 : 1;
+                    const innerPts = [];
+                    for (let k = 0; k <= steps; k++) {
+                        const t = k / steps;
+                        if (ctrl) {
+                            const mt = 1 - t;
+                            innerPts.push({
+                                x: mt * mt * p1.x + 2 * mt * t * ctrl.x + t * t * p2.x,
+                                y: mt * mt * p1.y + 2 * mt * t * ctrl.y + t * t * p2.y
+                            });
+                        } else {
+                            innerPts.push({ x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t });
+                        }
+                    }
+
+                    // 計算向外法線並沿道路兩端各延伸 45m，對應 3D 場景中的延伸道路邊緣
+                    const extendM = 45;
+                    const startTanLen = Math.hypot(innerPts[1].x - innerPts[0].x, innerPts[1].y - innerPts[0].y) || 1;
+                    const startTx = (innerPts[1].x - innerPts[0].x) / startTanLen;
+                    const startTy = (innerPts[1].y - innerPts[0].y) / startTanLen;
+                    const endIdx = innerPts.length - 1;
+                    const endTanLen = Math.hypot(innerPts[endIdx].x - innerPts[endIdx - 1].x, innerPts[endIdx].y - innerPts[endIdx - 1].y) || 1;
+                    const endTx = (innerPts[endIdx].x - innerPts[endIdx - 1].x) / endTanLen;
+                    const endTy = (innerPts[endIdx].y - innerPts[endIdx - 1].y) / endTanLen;
+
+                    const extInner = [
+                        { x: innerPts[0].x - startTx * extendM, y: innerPts[0].y - startTy * extendM },
+                        ...innerPts,
+                        { x: innerPts[endIdx].x + endTx * extendM, y: innerPts[endIdx].y + endTy * extendM }
+                    ];
+                    const extOuter = extInner.map((pt, k) => {
+                        const prev = extInner[Math.max(0, k - 1)];
+                        const next = extInner[Math.min(extInner.length - 1, k + 1)];
+                        const inN = getSegmentNormal(prev, next, sCentroid);
+                        return { x: pt.x - inN.x * rw, y: pt.y - inN.y * rw };
+                    });
+
+                    const roadLabel = `${road.name || '道路'} 邊緣`;
+                    for (let k = 0; k < extInner.length - 1; k++) {
+                        list.push({
+                            type: 'segment',
+                            p1: toActiveLocalFromSite(extInner[k]),
+                            p2: toActiveLocalFromSite(extInner[k + 1]),
+                            label: `${roadLabel}(內側)`
+                        });
+                        list.push({
+                            type: 'segment',
+                            p1: toActiveLocalFromSite(extOuter[k]),
+                            p2: toActiveLocalFromSite(extOuter[k + 1]),
+                            label: `${roadLabel}(對側)`
+                        });
+                    }
+                    // 道路對側正對基地兩端之對應點也加入角點吸附，方便快速對齊對街新增基地
+                    list.push({ type: 'point', pt: toActiveLocalFromSite(extOuter[1]), label: `${road.name || '道路'} 對側對齊點` });
+                    list.push({ type: 'point', pt: toActiveLocalFromSite(extOuter[extOuter.length - 2]), label: `${road.name || '道路'} 對側對齊點` });
+                });
+            });
+        });
+        return list;
+    }, [sites, siteLayouts, activeSiteId]);
+
+    // 結束樓層形狀編輯時自動檢查是否超出基地／退縮限制區域，若超界則跳出非阻斷詢問卡片
+    useEffect(() => {
+        const prevId = prevEditingFloorIdRef.current;
+        const curId = selectedFloor?.id || null;
+        prevEditingFloorIdRef.current = curId;
+
+        if (prevId && prevId !== curId && prevId !== 'base' && prevId !== 'excavation' && !/^B\d+$/.test(prevId)) {
+            const basePrevId = prevId.includes('-') ? prevId.split('-')[0] : prevId;
+            const targetLayer = floorLayers.find(l => l.id === basePrevId || l.id.startsWith(`${basePrevId}-`));
+            const pts = targetLayer?.unsplitPoints || targetLayer?.points;
+            const curves = targetLayer?.unsplitCurves || targetLayer?.curves || null;
+            const allowedPts = targetLayer?.allowedPoints;
+            const allowedCurves = targetLayer?.allowedCurves || null;
+
+            if (pts && pts.length >= 3 && allowedPts && allowedPts.length >= 3) {
+                const denseSubject = discretizePolygon(pts, curves, 6).points;
+                const denseAllowed = discretizePolygon(allowedPts, allowedCurves, 8).points;
+                if (!allInsidePolygon(denseSubject, denseAllowed)) {
+                    const origArea = calculatePolygonArea(pts, curves);
+                    const constrained = constrainPolygonToLegalBoundary(pts, curves, allowedPts, allowedCurves);
+                    const rawClipped = constrained?.points || [];
+                    // 簡化幾乎共線的冗餘點，保持切完後的多邊形乾淨好編輯
+                    const simplified = [];
+                    for (let i = 0; i < rawClipped.length; i++) {
+                        const prev = rawClipped[(i - 1 + rawClipped.length) % rawClipped.length];
+                        const curr = rawClipped[i];
+                        const next = rawClipped[(i + 1) % rawClipped.length];
+                        if (Math.hypot(curr.x - prev.x, curr.y - prev.y) < 0.08) continue;
+                        const cross = Math.abs((curr.x - prev.x) * (next.y - curr.y) - (curr.y - prev.y) * (next.x - curr.x));
+                        const d1 = Math.hypot(curr.x - prev.x, curr.y - prev.y);
+                        const d2 = Math.hypot(next.x - curr.x, next.y - curr.y);
+                        if (d1 > 1e-4 && d2 > 1e-4 && cross / (d1 * d2) < 0.03) continue;
+                        simplified.push({ x: parseFloat(curr.x.toFixed(3)), y: parseFloat(curr.y.toFixed(3)) });
+                    }
+                    const finalClipped = simplified.length >= 3 ? simplified : rawClipped;
+                    const clippedArea = finalClipped.length >= 3 ? calculatePolygonArea(finalClipped, null) : 0;
+                    const removedAreaM2 = Math.max(0, origArea - clippedArea);
+                    if (finalClipped.length >= 3 && removedAreaM2 > 0.15) {
+                        setOverflowClipPrompt({
+                            floorId: basePrevId,
+                            clippedPoints: finalClipped,
+                            removedAreaM2,
+                            clippedAreaM2: clippedArea
+                        });
+                    }
+                }
+            }
+        }
+    }, [selectedFloor, floorLayers]);
+
+    const nextSiteLabel = useMemo(() => {
+        const labels = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        const idx = (sites || []).length;
+        return labels[idx] || String(idx + 1);
+    }, [sites]);
+
+    const handleSelectLayerForUnifiedEdit = (id) => {
+        if (!id) {
+            setSelectedFloor(null);
+            setFocusOffset({ x: 0, y: 0, z: 0 });
+            setZoom(1);
+            return;
+        }
+        if (id === 'base' || id === 'excavation' || /^B\d+$/.test(id)) {
+            setSelectedFloor({ id });
+            setFocusOffset({ x: 0, y: 0, z: 0 });
+        } else {
+            const l = floorLayers.find(f => f.id === id || f.id.startsWith(`${id}-`));
+            if (l) {
+                if (selectedFloor?.id === l.id || selectedFloor?.id === id) return;
+                handleLayerClick({ stopPropagation: () => {} }, l);
+            }
+        }
+    };
+
+    const handleCloseUnifiedEdit = () => {
+        setSelectedFloor(null);
+        setFocusOffset({ x: 0, y: 0, z: 0 });
+        setZoom(1);
+    };
+
+    // 處理從台灣地籍圖 / 上傳 PDF・圖片 / DXF / TWD97 坐標表匯入之基地多邊形、原形狀道路多邊形、面前道路與底圖
+    const handleCadastralImport = ({ points, mode, underlay, detectedRoad, importedRoadPolygons: roadPolys = [] }) => {
+        if (!points || points.length < 3) return;
+        if (underlay) {
+            setCadastralUnderlay(underlay);
+        }
+        setImportedRoadPolygons(Array.isArray(roadPolys) ? roadPolys : []);
+        if (mode === 'new' && typeof onCreateDrawnSite === 'function') {
+            const activeLayout = siteLayouts.get(activeSiteId) || { x: 0, y: 0, rotation: 0 };
+            const cosS = Math.cos(activeLayout.rotation || 0);
+            const sinS = Math.sin(activeLayout.rotation || 0);
+            const worldPts = points.map(p => ({
+                x: activeLayout.x + (p.x * cosS - p.y * sinS),
+                y: activeLayout.y + (p.x * sinS + p.y * cosS)
+            }));
+            onCreateDrawnSite(worldPts);
+        } else {
+            updateFloorSetting('base', 'curves', null);
+            updateFloorSetting('base', 'points', points);
+            const bounds = getPolygonBounds(points);
+            if (bounds) {
+                const bw = bounds.maxX - bounds.minX;
+                const bd = bounds.maxY - bounds.minY;
+                onUpdateInputs('baseWidth', parseFloat(bw.toFixed(2)));
+                onUpdateInputs('baseWidthM', parseFloat(bw.toFixed(2)));
+                onUpdateInputs('baseDepthM', parseFloat(bd.toFixed(2)));
+            }
+            const newArea = calculatePolygonArea(points, null);
+            if (newArea > 0) {
+                onUpdateInputs('baseArea', parseFloat(newArea.toFixed(2)));
+            }
+            // 清除舊基地遺留之後院／側院邊索引，避免與新匯入地籍多邊形之邊號錯位而造成高度比與退縮檢討錯誤
+            setEdgeTypes({});
+            // 若使用者在匯入工作台中有點選道路範圍，自動將相鄰邊設定為面前道路與臨路邊；否則將既有道路邊號歸零至合法邊
+            const existingRoads = Array.isArray(inputs.roads) ? inputs.roads : [];
+            if (detectedRoad && Array.isArray(detectedRoad.edgeIndices) && detectedRoad.edgeIndices.length > 0) {
+                const updatedRoads = existingRoads.length > 0
+                    ? existingRoads.map((r, idx) => idx === 0 ? {
+                        ...r,
+                        width: detectedRoad.width || r.width || 10,
+                        edgeIndices: detectedRoad.edgeIndices,
+                        edgeIndex: undefined,
+                        type: 'primary'
+                    } : { ...r, edgeIndices: [], edgeIndex: undefined })
+                    : [{
+                        id: 1,
+                        name: detectedRoad.name || '面前道路',
+                        width: detectedRoad.width || 10,
+                        edgeIndices: detectedRoad.edgeIndices,
+                        type: 'primary'
+                    }];
+                onUpdateRoads(updatedRoads);
+                setFrontageIndices(new Set(detectedRoad.edgeIndices));
+            } else if (existingRoads.length > 0) {
+                // 未指定道路時，自動將主要道路對齊至新基地最南側（或最長）邊界，避免舊邊號越界或錯位
+                const safeIdx = Math.min(2, points.length - 1);
+                const resetRoads = existingRoads.map((r, idx) => idx === 0
+                    ? { ...r, edgeIndices: [safeIdx], edgeIndex: undefined, type: 'primary' }
+                    : { ...r, edgeIndices: [], edgeIndex: undefined }
+                );
+                onUpdateRoads(resetRoads);
+                setFrontageIndices(new Set([safeIdx]));
+            }
+            onUpdateInputs('baseVersion', (inputs.baseVersion || 0) + 1);
+            handleBaseEditEnd('base', points);
+        }
+        setSelectedFloor({ id: 'base' });
+        setFocusOffset({ x: 0, y: 0, z: 0 });
+    };
+
+    const unifiedController = useUnifiedEditorController({
+        layers: floorLayers,
+        baseWidthM,
+        baseDepthM,
+        selectedFloorId: selectedFloor?.id,
+        onSelectFloor: handleSelectLayerForUnifiedEdit,
+        onCloseFloorEdit: handleCloseUnifiedEdit,
+        onUpdateSetting: updateFloorSetting,
+        floorSettings,
+        inputs,
+        scale3d: scale,
+        basements,
+        basePoints: normalizedData.points,
+        baseCurves: normalizedData.curves,
+        excavationPoints,
+        excavationCurves,
+        frontageIndices,
+        onUpdateFrontageIndices: setFrontageIndices,
+        edgeTypes,
+        onUpdateEdgeTypes: updateEdgeTypes,
+        onUpdateInputs,
+        onUpdateRoads,
+        onEditEnd: handleBaseEditEnd,
+        unitSettings,
+        onUpdateUnitSettings: setUnitSettings,
+        onApplyAll: handleApplyAllFloors,
+        floorsAboveValue,
+        onUpdateFloorsAbove: handleSetFloorsAbove,
+        screenToSiteLocal,
+        projectLocalToScreen,
+        snapCandidates,
+        onCreateDrawnSite: (drawnLocalPts) => {
+            if (typeof onCreateDrawnSite === 'function') {
+                const activeLayout = siteLayouts.get(activeSiteId) || { x: 0, y: 0, rotation: 0 };
+                const cosS = Math.cos(activeLayout.rotation || 0);
+                const sinS = Math.sin(activeLayout.rotation || 0);
+                const worldPts = drawnLocalPts.map(p => ({
+                    x: activeLayout.x + (p.x * cosS - p.y * sinS),
+                    y: activeLayout.y + (p.x * sinS + p.y * cosS)
+                }));
+                onCreateDrawnSite(worldPts);
+            }
+        },
+        activeSiteName: activeSite.name || '基地 A',
+        nextSiteLabel
+    });
+
+    // 支援從外部對話框或右鍵選單直接啟動點拉線繪製基地模式
+    const { startDrawingSite, isDrawingSite } = unifiedController;
+    useEffect(() => {
+        if (externalDrawSiteMode) {
+            startDrawingSite(externalDrawSiteMode);
+            if (typeof setExternalDrawSiteMode === 'function') {
+                setExternalDrawSiteMode(null);
+            }
+        }
+    }, [externalDrawSiteMode, setExternalDrawSiteMode, startDrawingSite]);
+
+    // 同步編輯/繪製狀態給外部，讓手機 Bottom Sheet 在進入單層編輯或繪製基地時自動讓位
+    useEffect(() => {
+        if (typeof onEditStateChange === 'function') {
+            onEditStateChange(Boolean(selectedFloor) || Boolean(isDrawingSite));
+        }
+    }, [selectedFloor, isDrawingSite, onEditStateChange]);
 
     // Pre-calculate Normalized Base Points for the entire visualization context
     // This ensures all layers share the same "Site Center" origin.
@@ -3382,9 +4002,18 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                 centerPathD += `${i === 0 ? 'M' : 'L'} ${x} ${y} `;
             });
 
-            paths.push(<path key={`road-path-${ps.site.id}-${gIdx}`} d={`${innerPathD}${outerPathD}Z`} fill={isDarkMode ? "rgba(71, 85, 105, 0.55)" : "rgba(148, 163, 184, 0.55)"} stroke={isDarkMode ? "#64748b" : "#94a3b8"} strokeWidth="1.5" strokeDasharray="5,5" />);
+            const roadFill = aoMode
+                ? (isNightAO ? "rgba(22, 25, 31, 0.92)" : "rgba(205, 210, 218, 0.92)")
+                : (isDarkMode ? "rgba(71, 85, 105, 0.55)" : "rgba(148, 163, 184, 0.55)");
+            const roadStroke = aoMode
+                ? (isNightAO ? "rgba(42, 48, 58, 0.75)" : "rgba(130, 138, 150, 0.72)")
+                : (isDarkMode ? "#64748b" : "#94a3b8");
+            const roadCenterStroke = aoMode
+                ? (isNightAO ? "rgba(75, 85, 99, 0.35)" : "rgba(255, 255, 255, 0.65)")
+                : (isDarkMode ? "rgba(226, 232, 240, 0.35)" : "rgba(255, 255, 255, 0.7)");
+            paths.push(<path key={`road-path-${ps.site.id}-${gIdx}`} d={`${innerPathD}${outerPathD}Z`} fill={roadFill} stroke={roadStroke} strokeWidth={aoMode ? "1.1" : "1.5"} strokeDasharray={aoMode ? "none" : "5,5"} />);
             if (centerPathD) {
-                paths.push(<path key={`road-center-${ps.site.id}-${gIdx}`} d={centerPathD.trim()} fill="none" stroke={isDarkMode ? "rgba(226, 232, 240, 0.35)" : "rgba(255, 255, 255, 0.7)"} strokeWidth="1.2" strokeDasharray="8,6" />);
+                paths.push(<path key={`road-center-${ps.site.id}-${gIdx}`} d={centerPathD.trim()} fill="none" stroke={roadCenterStroke} strokeWidth="1.2" strokeDasharray="8,6" />);
             }
 
             // 計算道路累積長度與法向插值輔助函式
@@ -3424,19 +4053,31 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                 };
             };
 
-            // 沿道路兩側探測「非基地內」之區段，於有樹的地方繪製虛擬人行道，並在虛擬人行道上配置三種樹形與三色階行道樹
-            const virtualSidewalkW = 2.4; // 虛擬人行道寬度 (m)
-            const treeCurbOffsetM = 1.15; // 行道樹位於虛擬人行道中央偏路緣處
-            const treeSpacingM = 13.5;
+            // 沿道路兩側繪製與基地前院/騎樓退縮視覺完全一體的人行道鋪面，並於基地範圍外配置三種樹形與三色階行道樹
+            const siteInForRoad = site.inputs || inputs;
+            const sFrontForRoad = parseFloat(siteInForRoad.frontYardDepth) || 0;
+            const sArcadeForRoad = (siteInForRoad.frontYardDepth == 0 && siteInForRoad.arcadeDepth) ? parseFloat(siteInForRoad.arcadeDepth) : 0;
+            const siteFrontDepthM = sArcadeForRoad > 0 ? sArcadeForRoad : sFrontForRoad;
+
+            const virtualSidewalkW = 2.4; // 對向側預設人行道寬度 (m)
+            const treeCurbOffsetM = 1.15; // 行道樹位於人行道偏路緣處
+            const treeSpacingM = 30.0;
             const treeEdgeMarginM = 6.0;
             const treePlanR = Math.max(4.2, 1.25 * scale);
             const pitHalf = Math.max(2.6, 0.75 * scale);
-            const sampleStepM = 1.8;
-            const numSteps = Math.max(2, Math.ceil(totalRoadLen / sampleStepM));
+            const sampleStepM = 0.5;
+            const numSteps = Math.max(4, Math.ceil(totalRoadLen / sampleStepM));
 
-            // sideIdx = 0: 道路內側（僅在基地範圍外的延伸段有效，基地內絕不種樹）
+            // sideIdx = 0: 道路內側（與基地前院人行道同寬並無縫相接為一體；行道樹僅種植於基地外延伸段）
             // sideIdx = 1: 道路外側（對向側整條路緣，若無其他基地重疊則全程有效）
             [0, 1].forEach(sideIdx => {
+                const effectiveSidewalkW = (sideIdx === 0 && siteFrontDepthM > 0)
+                    ? siteFrontDepthM
+                    : virtualSidewalkW;
+                const walkCenterOffsetM = (sideIdx === 0 && siteFrontDepthM > 0)
+                    ? Math.min(Math.max(0.7, effectiveSidewalkW * 0.5), Math.max(0.7, effectiveSidewalkW - 0.35))
+                    : treeCurbOffsetM;
+
                 const samples = [];
                 for (let k = 0; k <= numSteps; k++) {
                     const distM = (k / numSteps) * totalRoadLen;
@@ -3449,44 +4090,62 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                         y: baseY + outUy * curbDist
                     };
                     const midPt = {
-                        x: baseX + outUx * (curbDist + dirSign * treeCurbOffsetM),
-                        y: baseY + outUy * (curbDist + dirSign * treeCurbOffsetM)
+                        x: baseX + outUx * (curbDist + dirSign * walkCenterOffsetM),
+                        y: baseY + outUy * (curbDist + dirSign * walkCenterOffsetM)
                     };
                     const backPt = {
-                        x: baseX + outUx * (curbDist + dirSign * virtualSidewalkW),
-                        y: baseY + outUy * (curbDist + dirSign * virtualSidewalkW)
+                        x: baseX + outUx * (curbDist + dirSign * effectiveSidewalkW),
+                        y: baseY + outUy * (curbDist + dirSign * effectiveSidewalkW)
                     };
 
-                    // 嚴格排除任何進入基地內部的點位（確保基地內不要有樹）
-                    const insideSite = isPointInsideAnySite(midPt, 0.45) || isPointInsideAnySite(backPt, 0.25);
-                    samples.push({ distM, curbPt, midPt, backPt, valid: !insideSite });
+                    // 當基地設有前院/騎樓退縮人行道 (siteFrontDepthM > 0) 時，道路內側 (sideIdx === 0) 人行道鋪面與基地前院人行道直接貫通為單一連續帶，僅排除基地範圍內種植行道樹
+                    const insideSite = (sideIdx === 0 && siteFrontDepthM > 0)
+                        ? false
+                        : (isPointInsideAnySite(midPt, 0.05) || isPointInsideAnySite(backPt, 0.05));
+                    samples.push({ idx: k, distM, curbPt, midPt, backPt, valid: !insideSite });
                 }
 
-                // 將連續 valid 的採樣點聚合為虛擬人行道區段 (segments)
+                // 將連續 valid 的採樣點聚合為人行道區段
                 const validRuns = [];
                 let curRun = [];
-                samples.forEach(sp => {
+                samples.forEach((sp, idx) => {
                     if (sp.valid) {
+                        if (curRun.length === 0 && idx > 0 && !samples[idx - 1].valid) {
+                            curRun.push(samples[idx - 1]);
+                        }
                         curRun.push(sp);
                     } else {
-                        if (curRun.length >= 2) validRuns.push(curRun);
+                        if (curRun.length >= 2) {
+                            curRun.push(sp);
+                            validRuns.push(curRun);
+                        }
                         curRun = [];
                     }
                 });
                 if (curRun.length >= 2) validRuns.push(curRun);
 
+                // 行人動線統一以「道路起點至道路終點」貫通全程，絕不於道路與基地交點截斷或獨立消失
+                if (samples.length >= 2) {
+                    const continuousWalkPath = samples.map(sp => (sp.valid ? sp.midPt : sp.curbPt));
+                    virtualSidewalkPaths.push(continuousWalkPath);
+                }
+
                 validRuns.forEach((run, runIdx) => {
                     const runStartM = run[0].distM;
                     const runEndM = run[run.length - 1].distM;
                     const runLenM = runEndM - runStartM;
-                    if (runLenM < treeEdgeMarginM * 1.6) return;
+                    if (runLenM < treeEdgeMarginM * 1.2) return;
 
-                    // 先確認此區段內是否有配置行道樹（有樹的地方才增加虛擬人行道）
+                    // 先確認此區段內是否有配置行道樹（嚴格排除基地範圍內種植行道樹）
                     const runTrees = [];
                     for (let dM = runStartM + treeEdgeMarginM, tLocalIdx = 0; dM <= runEndM - treeEdgeMarginM; dM += treeSpacingM, tLocalIdx++) {
                         const { baseX, baseY, outUx, outUy } = sampleRoadAtDist(dM);
                         const curbDist = sideIdx === 0 ? 0 : roadRW;
                         const dirSign = sideIdx === 0 ? -1 : 1;
+                        const curbCheckPt = {
+                            x: baseX + outUx * (curbDist + dirSign * 0.2),
+                            y: baseY + outUy * (curbDist + dirSign * 0.2)
+                        };
                         const tp = {
                             x: baseX + outUx * (curbDist + dirSign * treeCurbOffsetM),
                             y: baseY + outUy * (curbDist + dirSign * treeCurbOffsetM),
@@ -3494,14 +4153,14 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                             shapeType: (tLocalIdx + sideIdx * 2 + gIdx) % 3,
                             colorTier: (tLocalIdx * 2 + sideIdx + gIdx) % 3
                         };
-                        if (!isPointInsideAnySite(tp, 0.85)) {
+                        if (!isPointInsideAnySite(tp, 1.2) && !isPointInsideAnySite(curbCheckPt, 0.8)) {
                             runTrees.push({ tp, tLocalIdx });
                         }
                     }
 
                     if (runTrees.length === 0) return;
 
-                    // 1. 繪製此行道樹區段對應之「虛擬人行道」鋪面帶與路緣石邊線
+                    // 1. 繪製此行道樹區段對應之「人行道」鋪面帶與路緣石邊線（與基地前院人行道完全共用同一石材磚格與邊界線條）
                     let swPathD = "";
                     let curbLineD = "";
                     let outerBorderD = "";
@@ -3526,26 +4185,25 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                                 fill={`url(#${vSidewalkPatternId})`}
                                 stroke="none"
                             />
-                            {/* 虛擬人行道臨路緣石實線 */}
+                            {/* 人行道臨路緣石實線 */}
                             <path
                                 d={curbLineD}
                                 fill="none"
-                                stroke={isDarkMode ? "rgba(203, 213, 225, 0.55)" : "rgba(100, 116, 139, 0.65)"}
-                                strokeWidth="1.4"
+                                stroke={isDarkMode ? "rgba(203, 213, 225, 0.65)" : "rgba(100, 116, 139, 0.72)"}
+                                strokeWidth="1.5"
                             />
-                            {/* 虛擬人行道外側虛線邊界 */}
+                            {/* 人行道內側邊界虛線 */}
                             <path
                                 d={outerBorderD}
                                 fill="none"
-                                stroke={isDarkMode ? "rgba(148, 163, 184, 0.45)" : "rgba(100, 116, 139, 0.45)"}
-                                strokeWidth="1"
+                                stroke={isDarkMode ? "rgba(148, 163, 184, 0.55)" : "rgba(100, 116, 139, 0.55)"}
+                                strokeWidth="1.1"
                                 strokeDasharray="4,3"
                             />
                         </g>
                     );
 
-                    // 將虛擬人行道中線加入行人漫步動線
-                    virtualSidewalkPaths.push(run.map(sp => sp.midPt));
+                    // (行人動線已改為整條道路起終點貫通，不再按個別區段切斷)
 
                     // 2. 配置此區段之行道樹（平面圖示 + 2.5D 三樹形三色階立體樹）
                     runTrees.forEach(({ tp, tLocalIdx }) => {
@@ -3631,19 +4289,19 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                 <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}>
                     <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible' }}>
                         <defs>
-                            {/* 虛擬人行道石材磚格鋪面樣式 */}
+                            {/* 道路與基地共享之一體式人行道石材磚格鋪面樣式（使用不透明石材底色以消除基地接縫色差；AO 模式自動轉為單色灰階） */}
                             <pattern id={vSidewalkPatternId} x="0" y="0" width={vTileSize} height={vTileSize} patternUnits="userSpaceOnUse">
-                                <rect width={vTileSize} height={vTileSize} fill={isDarkMode ? "rgba(100, 116, 139, 0.30)" : "rgba(226, 232, 240, 0.68)"} />
-                                <path d={`M ${vTileSize} 0 L 0 0 0 ${vTileSize}`} fill="none" stroke={isDarkMode ? "rgba(203, 213, 225, 0.25)" : "rgba(148, 163, 184, 0.42)"} strokeWidth="0.9" />
+                                <rect width={vTileSize} height={vTileSize} fill={aoMode ? (isNightAO ? "#242830" : "#e3e6eb") : (isDarkMode ? "#293548" : "#dce4ee")} />
+                                <path d={`M ${vTileSize} 0 L 0 0 0 ${vTileSize}`} fill="none" stroke={aoMode ? (isNightAO ? "rgba(148, 163, 184, 0.14)" : "rgba(148, 163, 184, 0.35)") : (isDarkMode ? "rgba(203, 213, 225, 0.28)" : "rgba(148, 163, 184, 0.48)")} strokeWidth="0.9" />
                             </pattern>
                         </defs>
                         {paths}
                         {svgLabels}
                     </svg>
                 </div>
-                <StreetTrees3D trees={streetTrees} scale={scale} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} />
-                <Pedestrians3D paths={virtualSidewalkPaths} scale={scale} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} />
-                <RoadVehicles3D lanes={vehicleLanes} scale={scale} w={w} d={d} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} />
+                <StreetTrees3D trees={streetTrees} scale={scale} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} aoMode={aoMode} aoNight={isNightAO} />
+                <Pedestrians3D paths={virtualSidewalkPaths} scale={scale} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} aoMode={aoMode} aoNight={isNightAO} />
+                <RoadVehicles3D lanes={vehicleLanes} scale={scale} w={w} d={d} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} aoMode={aoMode} aoNight={isNightAO} />
             </React.Fragment>
         );
     };
@@ -3725,20 +4383,21 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         const paths = [];
         const hatchPalette = {
             front: {
-                base: isDarkMode ? "rgba(148, 163, 184, 0.28)" : "rgba(226, 232, 240, 0.65)",
-                stripe: isDarkMode ? "rgba(226, 232, 240, 0.35)" : "rgba(148, 163, 184, 0.45)"
+                base: aoMode ? (isNightAO ? "#242830" : "#e3e6eb") : (isDarkMode ? "#293548" : "#dce4ee"),
+                stripe: aoMode ? (isNightAO ? "rgba(148, 163, 184, 0.14)" : "rgba(148, 163, 184, 0.35)") : (isDarkMode ? "rgba(203, 213, 225, 0.28)" : "rgba(148, 163, 184, 0.48)")
             },
             back: {
-                base: isDarkMode ? "rgba(16, 185, 129, 0.22)" : "rgba(16, 185, 129, 0.18)",
-                stripe: isDarkMode ? "rgba(16, 185, 129, 0.55)" : "rgba(16, 185, 129, 0.35)"
+                base: aoMode ? (isNightAO ? "rgba(60, 68, 82, 0.24)" : "rgba(210, 214, 220, 0.45)") : (isDarkMode ? "rgba(16, 185, 129, 0.22)" : "rgba(16, 185, 129, 0.18)"),
+                stripe: aoMode ? (isNightAO ? "rgba(100, 110, 126, 0.22)" : "rgba(160, 168, 180, 0.35)") : (isDarkMode ? "rgba(16, 185, 129, 0.55)" : "rgba(16, 185, 129, 0.35)")
             },
             side: {
-                base: isDarkMode ? "rgba(59, 130, 246, 0.22)" : "rgba(59, 130, 246, 0.18)",
-                stripe: isDarkMode ? "rgba(59, 130, 246, 0.55)" : "rgba(59, 130, 246, 0.35)"
+                base: aoMode ? (isNightAO ? "rgba(60, 68, 82, 0.24)" : "rgba(210, 214, 220, 0.45)") : (isDarkMode ? "rgba(59, 130, 246, 0.22)" : "rgba(59, 130, 246, 0.18)"),
+                stripe: aoMode ? (isNightAO ? "rgba(100, 110, 126, 0.22)" : "rgba(160, 168, 180, 0.35)") : (isDarkMode ? "rgba(59, 130, 246, 0.55)" : "rgba(59, 130, 246, 0.35)")
             }
         };
         const hatchSize = Math.max(6, Math.min(16, scale * 0.8));
-        const tileSize = Math.max(8, Math.min(18, scale * 1.1));
+        // 與道路人行道 (vTileSize) 採用完全相同的磚格尺寸與原點，讓接縫處磚縫 100% 連續貫通
+        const tileSize = Math.max(7, Math.min(15, scale * 0.95));
         const regionTypes = ['front', 'back', 'side'];
         const fillIds = { front: `setback-front-hatch-${ps.site.id}`, back: `setback-back-hatch-${ps.site.id}`, side: `setback-side-hatch-${ps.site.id}` };
         
@@ -3753,17 +4412,32 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
             const innerPts = buildOffsetPoints(type);
             const dPath = buildRingPath(innerPts);
             if (!dPath) return;
+
+            // 針對臨路前院/騎樓人行道，僅繪製臨路緣石線與內側退縮虛線（不繪製左右兩端截斷線，使基地人行道與道路人行道視覺完全融為一體）
+            let frontCurbD = "";
+            let frontInnerD = "";
+            if (type === 'front' && innerPts.length === normalizedPoints.length) {
+                for (let i = 0; i < normalizedPoints.length; i++) {
+                    if (getRegionType(edgeMap[i]) === 'front') {
+                        const p1 = normalizedPoints[i];
+                        const p2 = normalizedPoints[(i + 1) % normalizedPoints.length];
+                        const ip1 = innerPts[i];
+                        const ip2 = innerPts[(i + 1) % innerPts.length];
+                        frontCurbD += `M ${p1.x * scale + w / 2} ${p1.y * scale + d / 2} L ${p2.x * scale + w / 2} ${p2.y * scale + d / 2} `;
+                        frontInnerD += `M ${ip1.x * scale + w / 2} ${ip1.y * scale + d / 2} L ${ip2.x * scale + w / 2} ${ip2.y * scale + d / 2} `;
+                    }
+                }
+            }
             
             paths.push(
                 <React.Fragment key={`setback-area-${ps.site.id}-${type}`}>
                     <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible', position: 'absolute', top: 0, left: 0 }}>
                         <defs>
                             {type === 'front' ? (
-                                /* 臨道路面退縮範圍：人行道石材/透水磚格網鋪面樣式 */
+                                /* 臨道路面退縮範圍：與道路人行道完全一致之石材磚格鋪面樣式 */
                                 <pattern id={fillIds[type]} x="0" y="0" width={tileSize} height={tileSize} patternUnits="userSpaceOnUse">
                                     <rect width={tileSize} height={tileSize} fill={hatchPalette.front.base} />
-                                    <path d={`M ${tileSize} 0 L 0 0 0 ${tileSize}`} fill="none" stroke={hatchPalette.front.stripe} strokeWidth="1" />
-                                    <line x1="0" y1="0" x2={tileSize} y2={tileSize} stroke={isDarkMode ? "rgba(244, 63, 94, 0.25)" : "rgba(244, 63, 94, 0.20)"} strokeWidth="0.7" />
+                                    <path d={`M ${tileSize} 0 L 0 0 0 ${tileSize}`} fill="none" stroke={hatchPalette.front.stripe} strokeWidth="0.9" />
                                 </pattern>
                             ) : (
                                 <pattern id={fillIds[type]} x="0" y="0" width={hatchSize} height={hatchSize} patternUnits="userSpaceOnUse" patternContentUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -3775,60 +4449,32 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                         <path
                             d={dPath}
                             fill={`url(#${fillIds[type]})`}
-                            stroke={type === 'front' ? (isDarkMode ? "rgba(244, 63, 94, 0.55)" : "rgba(244, 63, 94, 0.45)") : "none"}
-                            strokeWidth={type === 'front' ? "1" : "0"}
-                            strokeDasharray={type === 'front' ? "3,2" : "none"}
+                            stroke="none"
                             fillRule="evenodd"
                         />
+                        {type === 'front' && frontCurbD && (
+                            <>
+                                <path
+                                    d={frontCurbD}
+                                    fill="none"
+                                    stroke={isDarkMode ? "rgba(203, 213, 225, 0.65)" : "rgba(100, 116, 139, 0.72)"}
+                                    strokeWidth="1.5"
+                                />
+                                <path
+                                    d={frontInnerD}
+                                    fill="none"
+                                    stroke={isDarkMode ? "rgba(148, 163, 184, 0.55)" : "rgba(100, 116, 139, 0.55)"}
+                                    strokeWidth="1.1"
+                                    strokeDasharray="4,3"
+                                />
+                            </>
+                        )}
                     </svg>
                 </React.Fragment>
             );
         });
 
-        // 計算臨道路退縮範圍（人行道）之行人漫步動線軌跡（自動貼合直線與曲線基地邊界）
-        const pedestrianPaths = [];
-        const frontDepthForWalk = getDepthByType('front');
-        if (frontDepthForWalk > 0.4 && rawNormalized.length >= 3 && frontIndices.size > 0) {
-            const rawN = rawNormalized.length;
-            const walkOffsetM = Math.min(Math.max(0.7, frontDepthForWalk * 0.5), Math.max(0.7, frontDepthForWalk - 0.35));
-            frontIndices.forEach(eIdx => {
-                if (eIdx < 0 || eIdx >= rawN) return;
-                const p1 = rawNormalized[eIdx];
-                const p2 = rawNormalized[(eIdx + 1) % rawN];
-                const ctrl = normalizedData.curves?.[eIdx];
-                const steps = ctrl ? 16 : 1;
-                const edgeSamples = [];
-                for (let s = 0; s <= steps; s++) {
-                    const t = s / steps;
-                    if (ctrl) {
-                        const mt = 1 - t;
-                        edgeSamples.push({
-                            x: mt * mt * p1.x + 2 * mt * t * ctrl.x + t * t * p2.x,
-                            y: mt * mt * p1.y + 2 * mt * t * ctrl.y + t * t * p2.y
-                        });
-                    } else {
-                        edgeSamples.push({
-                            x: p1.x + (p2.x - p1.x) * t,
-                            y: p1.y + (p2.y - p1.y) * t
-                        });
-                    }
-                }
-                const walkChain = [];
-                for (let s = 0; s <= steps; s++) {
-                    const qA = edgeSamples[Math.max(0, s - 1)];
-                    const qB = edgeSamples[Math.min(steps, s + 1)];
-                    const inN = getSegmentNormal(qA, qB, centroid);
-                    walkChain.push({
-                        x: edgeSamples[s].x + inN.x * walkOffsetM,
-                        y: edgeSamples[s].y + inN.y * walkOffsetM
-                    });
-                }
-                if (walkChain.length >= 2) {
-                    pedestrianPaths.push(walkChain);
-                }
-            });
-        }
-
+        // (行人動線已統一整合於道路兩端貫通之人行道，不再於基地交點獨立生成或消失)
         const labels = [];
         const colorByType = { front: "#f43f5e", back: "#10b981", side: "#3b82f6" };
         const labelByType = { front: arcadeM > 0 ? "騎樓 (人行道)" : "前院 (人行道)", back: "後院", side: "側院" };
@@ -3858,20 +4504,18 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
             });
         });
 
-        const siteWorldRotDeg = rotationZ + ((ps.layout?.rotation || 0) * 180 / Math.PI);
         return (
             <React.Fragment>
                 <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
                     {paths}
                     <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible', position: 'absolute', top: 0, left: 0 }}>
                         {labels.map(label => (
-                            <text key={label.key} x={label.x * scale + w / 2} y={label.y * scale + d / 2} textAnchor="middle" dominantBaseline="middle" fontSize="10" fontWeight="700" fill={label.color} opacity={0.95} className="select-none">
+                            <text key={label.key} x={label.x * scale + w / 2} y={label.y * scale + d / 2} textAnchor="middle" dominantBaseline="middle" fontSize="10" fontWeight="700" fill={aoMode ? (isNightAO ? "#94a3b8" : "#475569") : label.color} opacity={0.95} className="select-none">
                                 {label.text}
                             </text>
                         ))}
                     </svg>
                 </div>
-                <Pedestrians3D paths={pedestrianPaths} scale={scale} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} />
             </React.Fragment>
         );
     };
@@ -4050,12 +4694,21 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
             }
         }
 
+        const isWorkingCW = polygonSignedArea(workingPoints) >= 0;
+        const getExactInwardNormal = (a, b) => {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 1e-6) return { x: 0, y: 0 };
+            return isWorkingCW ? { x: -dy / len, y: dx / len } : { x: dy / len, y: -dx / len };
+        };
+
         for (let i = 0; i < workingPoints.length; i++) {
             const p1 = workingPoints[i];
             const p2 = workingPoints[(i + 1) % workingPoints.length];
             const originalIdx = workingEdgeIndices[i];
 
-            const normal = getSegmentNormal(p1, p2, centroid);
+            const normal = getExactInwardNormal(p1, p2);
             const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
 
             if (!linesByEdge[originalIdx]) linesByEdge[originalIdx] = [];
@@ -4199,12 +4852,30 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         }
         if (frontIndices.size === 0) return null;
 
-        const centroid = getPolygonCentroid(basePts);
+        const isBaseCW = polygonSignedArea(basePts) >= 0;
+        const getExactInwardNormal = (a, b) => {
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const len = Math.hypot(dx, dy);
+            if (len < 1e-6) return { x: 0, y: 0 };
+            // 依據多邊形實際繞序 (CW/CCW) 取得嚴格指向基地內側的法向量，絕不因凹形、狹長或不規則地籍基地質心偏移而反轉
+            return isBaseCW ? { x: -dy / len, y: dx / len } : { x: dy / len, y: -dx / len };
+        };
+
         const surfaces = [];
         const frontArr = Array.from(frontIndices);
 
         frontArr.forEach((edgeIdx, fGroupIdx) => {
             if (edgeIdx < 0 || edgeIdx >= basePts.length) return;
+            // 針對該臨路邊查找實際對應之道路寬度（支援多條不同路寬之道路各自檢討高度比）
+            const matchedRoad = siteRoads.find(r =>
+                (Array.isArray(r.edgeIndices) && r.edgeIndices.includes(edgeIdx)) ||
+                (r.edgeIndex !== undefined && r.edgeIndex !== '' && parseInt(r.edgeIndex, 10) === edgeIdx)
+            ) || primRoad;
+            const edgeRoadW_M = matchedRoad ? (parseFloat(matchedRoad.width) || primRoadW_M) : primRoadW_M;
+            const edgeHRatioH = 3.6 * (edgeRoadW_M + fD) * scale;
+            if (edgeHRatioH <= 0) return;
+
             const p1 = basePts[edgeIdx];
             const p2 = basePts[(edgeIdx + 1) % basePts.length];
             const ctrl = baseCrvs?.[edgeIdx];
@@ -4229,7 +4900,7 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
 
             const segNormals = [];
             for (let j = 0; j < M; j++) {
-                segNormals.push(getSegmentNormal(verts[j], verts[j + 1], centroid));
+                segNormals.push(getExactInwardNormal(verts[j], verts[j + 1]));
             }
 
             const vertNormals = [];
@@ -4244,15 +4915,48 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                 }
             }
 
+            // 若為地籍圖匯入之真實道路多邊形，以射線求交找出對側道路實際邊界距離，確保高度比斜面精準起算於對側路緣
+            let actualOppositeRoadW = edgeRoadW_M;
+            if (targetSite.id === activeSiteId && importedRoadPolygons.length > 0 && verts.length > 0) {
+                const midV = verts[Math.floor(verts.length / 2)];
+                const midN = vertNormals[Math.floor(vertNormals.length / 2)];
+                const outDx = -midN.x;
+                const outDy = -midN.y;
+                let maxHitDist = 0;
+                importedRoadPolygons.forEach(rp => {
+                    const rPts = rp.points || [];
+                    if (rPts.length < 3) return;
+                    for (let k = 0; k < rPts.length; k++) {
+                        const a = rPts[k];
+                        const b = rPts[(k + 1) % rPts.length];
+                        const ex = b.x - a.x;
+                        const ey = b.y - a.y;
+                        const denom = outDx * ey - outDy * ex;
+                        if (Math.abs(denom) < 1e-6) continue;
+                        const rx = a.x - midV.x;
+                        const ry = a.y - midV.y;
+                        const tRay = (rx * ey - ry * ex) / denom;
+                        const uSeg = (rx * outDy - ry * outDx) / denom;
+                        if (tRay > 1.5 && uSeg >= -0.02 && uSeg <= 1.02) {
+                            if (tRay > maxHitDist) maxHitDist = tRay;
+                        }
+                    }
+                });
+                if (maxHitDist > 1.5 && maxHitDist < 120) {
+                    actualOppositeRoadW = maxHitDist;
+                }
+            }
+            const finalHRatioH = 3.6 * (actualOppositeRoadW + fD) * scale;
+
             const bottomPts = verts.map((v, j) => ({
-                x: offX + (v.x - vertNormals[j].x * primRoadW_M) * scale,
-                y: offY + (v.y - vertNormals[j].y * primRoadW_M) * scale,
+                x: offX + (v.x - vertNormals[j].x * actualOppositeRoadW) * scale,
+                y: offY + (v.y - vertNormals[j].y * actualOppositeRoadW) * scale,
                 z: 0
             }));
             const topPts = verts.map((v, j) => ({
                 x: offX + (v.x + vertNormals[j].x * fD) * scale,
                 y: offY + (v.y + vertNormals[j].y * fD) * scale,
-                z: hRatioH
+                z: finalHRatioH
             }));
 
             const midStripIdx = Math.floor(M / 2);
@@ -4270,14 +4974,14 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                 const horizDist = Math.hypot(dx, dy);
                 if (horizDist < 1e-4) continue;
 
-                const slopeLen = Math.hypot(horizDist, hRatioH);
+                const slopeLen = Math.hypot(horizDist, finalHRatioH);
                 const ux = dx / horizDist;
                 const uy = dy / horizDist;
                 const tx = -uy;
                 const ty = ux;
 
                 const angleZ = (Math.atan2(dy, dx) * 180) / Math.PI;
-                const angleY = -(Math.atan2(hRatioH, horizDist) * 180) / Math.PI;
+                const angleY = -(Math.atan2(finalHRatioH, horizDist) * 180) / Math.PI;
 
                 const s1_x = (S1.x - midS.x) * ux + (S1.y - midS.y) * uy;
                 const s1_y = (S1.x - midS.x) * tx + (S1.y - midS.y) * ty;
@@ -4313,8 +5017,8 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                         >
                             <polygon
                                 points={`${s1_x},${s1_y} ${s2_x},${s2_y} ${e2_x},${e2_y} ${e1_x},${e1_y}`}
-                                fill={isDarkMode ? "rgba(244, 63, 94, 0.24)" : "rgba(244, 63, 94, 0.20)"}
-                                stroke="rgba(244, 63, 94, 0.22)"
+                                fill={isDarkMode ? "rgba(220, 38, 38, 0.11)" : "rgba(220, 38, 38, 0.08)"}
+                                stroke="rgba(220, 38, 38, 0.25)"
                                 strokeWidth="0.75"
                             />
                             {/* 底部起算邊界線 (道路外側) */}
@@ -4361,145 +5065,1127 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
         return surfaces;
     };
 
-    const skyBgColor = isDarkMode ? '#0f172a' : '#e0f2fe';
-    const groundColor = isDarkMode ? '#1e293b' : '#e7e5e4';
-    const landscapeStyle = isLandscapeMode
-        ? { position: 'fixed', top: 0, left: '100vw', width: '100dvh', height: '100vw', transform: 'rotate(90deg)', transformOrigin: 'top left', zIndex: 9999, margin: 0, borderRadius: 0, touchAction: 'none', backgroundColor: skyBgColor }
-        : { touchAction: 'none', backgroundColor: skyBgColor };
-    const controlBarClass = isLandscapeMode ? "absolute top-6 right-6 z-30 flex flex-col items-end gap-2" : "absolute top-4 right-4 z-30 flex flex-col items-end gap-2 sm:flex-row sm:items-center";
+    const skyBgColor = aoMode
+        ? (isNightAO ? '#090b0f' : '#e6e8ec')
+        : (isDarkMode ? '#0f172a' : '#e0f2fe');
+    const groundColor = aoMode
+        ? (isNightAO ? '#0d0f14' : '#e4e7ec')
+        : (isDarkMode ? '#1e293b' : '#e7e5e4');
+    const landscapeStyle = { touchAction: 'none', backgroundColor: skyBgColor };
+    const controlBarClass = "absolute top-4 right-4 z-30 flex flex-row items-center gap-2";
     const viewTransition = isDragging ? 'none' : 'transform 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)';
 
     return (
         <div className="w-full h-full flex flex-col relative overflow-hidden font-['GenYoGothic',_sans-serif]">
-            {showUnusedPrompt && (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center">
-                    <div className="absolute inset-0 bg-black/30" onClick={() => setShowUnusedPrompt(false)}></div>
-                    <div className="relative bg-white rounded-lg shadow-xl border border-stone-200 w-72 p-4">
-                        <h3 className="font-bold text-sm mb-2 text-stone-700">未用容積</h3>
+            {/* 超出基地／退縮限制範圍：結束編輯後非阻斷詢問是否自動切除並往上填補樓層 */}
+            {overflowClipPrompt && !selectedFloor && !unifiedController.isDrawingSite && (
+                <div
+                    className="absolute top-16 right-4 z-[68] bg-white/95 backdrop-blur-md border-2 border-red-600 shadow-[5px_5px_0_#991b1b] w-72 p-3 pointer-events-auto animate-in fade-in duration-150 no-context-menu"
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                >
+                    <div className="flex items-center justify-between border-b border-red-200 pb-1.5 mb-2">
+                        <span className="font-black text-xs text-red-700 flex items-center gap-1.5">
+                            <AlertTriangle size={14} strokeWidth={2.5} />
+                            <span>{overflowClipPrompt.floorId} 超出限制範圍</span>
+                        </span>
+                        <button
+                            onClick={() => setOverflowClipPrompt(null)}
+                            className="p-0.5 text-stone-400 hover:text-black transition-colors"
+                            title="保留現狀"
+                        >
+                            <X size={13} />
+                        </button>
+                    </div>
+                    <div className="text-[11px] font-bold text-stone-700 mb-2.5 leading-relaxed">
+                        偵測到 <span className="font-black text-red-600">{overflowClipPrompt.floorId}</span> 超出基地或退縮線約{' '}
+                        <span className="font-black text-red-600 font-mono">{formatNum(toPing(overflowClipPrompt.removedAreaM2))} 坪</span>。
+                        是否自動切除超出部分，並將面積往上填補樓層？
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                        <button
+                            onClick={() => {
+                                const { floorId, clippedPoints, removedAreaM2, clippedAreaM2 } = overflowClipPrompt;
+                                updateFloorSetting(floorId, 'points', clippedPoints);
+                                updateFloorSetting(floorId, 'curves', null);
+                                const avgFloorArea = Math.max(15, clippedAreaM2 || (massingLayers.currentTotalUsed / Math.max(1, massingLayers.totalFloors)));
+                                const addFloors = Math.max(1, Math.ceil(removedAreaM2 / avgFloorArea));
+                                const nextFloors = Math.max(1, (massingLayers.totalFloors || parseInt(inputs.floorsAbove || '4', 10)) + addFloors);
+                                setManualFloorsOverride(nextFloors);
+                                onUpdateInputs('floorsAbove', nextFloors);
+                                setOverflowClipPrompt(null);
+                            }}
+                            className="w-full px-2.5 py-1.5 bg-red-600 text-white text-[11px] font-black border border-black hover:bg-red-700 transition-colors"
+                        >
+                            自動切除並往上填補樓層
+                        </button>
+                        <div className="flex gap-1.5">
+                            <button
+                                onClick={() => {
+                                    const { floorId, clippedPoints } = overflowClipPrompt;
+                                    updateFloorSetting(floorId, 'points', clippedPoints);
+                                    updateFloorSetting(floorId, 'curves', null);
+                                    setOverflowClipPrompt(null);
+                                }}
+                                className="flex-1 px-2 py-1 bg-amber-100 text-amber-900 text-[11px] font-black border border-black hover:bg-amber-200 transition-colors"
+                            >
+                                僅切除修正
+                            </button>
+                            <button
+                                onClick={() => setOverflowClipPrompt(null)}
+                                className="flex-1 px-2 py-1 bg-stone-100 text-stone-700 text-[11px] font-black border border-black hover:bg-stone-200 transition-colors"
+                            >
+                                保留現狀
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 非阻斷式未用容積懸浮提醒小視窗（不遮蔽畫布、不打斷編輯，可隨時點擊處理或稍後再說） */}
+            {showUnusedPrompt && !overflowClipPrompt && !selectedFloor && !unifiedController.isDrawingSite && (
+                <div
+                    className="absolute top-16 right-4 z-[65] bg-white/95 backdrop-blur-md border-2 border-black shadow-[4px_4px_0_#000] w-68 p-3 pointer-events-auto animate-in fade-in duration-150 no-context-menu"
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                >
+                    <div className="flex items-center justify-between border-b border-stone-200 pb-1.5 mb-2">
+                        <span className="font-black text-xs text-emerald-700 flex items-center gap-1.5">
+                            <CheckCircle2 size={14} strokeWidth={2.5} />
+                            <span>剩餘未用容積提醒</span>
+                        </span>
+                        <button
+                            onClick={() => setShowUnusedPrompt(false)}
+                            className="p-0.5 text-stone-400 hover:text-black transition-colors"
+                            title="稍後處理"
+                        >
+                            <X size={13} />
+                        </button>
+                    </div>
+                    <div className="text-[11px] font-bold text-stone-600 mb-2.5 leading-relaxed">
+                        尚有 <span className="font-black text-emerald-700 font-mono">{formatNum(toPing(unusedArea))} 坪</span> 容積未使用，是否自動補充？
+                    </div>
+                    <div className="flex gap-1.5">
                         {randomSlabEnabled ? (
-                            <>
-                                <div className="text-xs text-stone-600 mb-3">還有 {formatNum(toPing(unusedArea))} 坪未使用，是否自動增加樓層？</div>
-                                <div className="flex gap-2">
-                                    <button onClick={() => {
-                                        setShowUnusedPrompt(false);
-                                        const avgArea = massingLayers.currentTotalUsed / Math.max(1, massingLayers.totalFloors);
-                                        const addFloors = Math.max(1, Math.round(unusedArea / avgArea));
-                                        const nextFloors = massingLayers.totalFloors + addFloors;
-                                        setManualFloorsOverride(nextFloors);
-                                        onUpdateInputs('floorsAbove', nextFloors);
-                                    }} className="flex-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold shadow-sm hover:bg-emerald-700">是</button>
-                                    <button onClick={() => setShowUnusedPrompt(false)} className="flex-1 px-3 py-1.5 rounded-lg bg-white border border-stone-300 text-stone-600 text-xs font-bold hover:bg-stone-50">否</button>
-                                </div>
-                            </>
+                            <button
+                                onClick={() => {
+                                    setShowUnusedPrompt(false);
+                                    const avgArea = massingLayers.currentTotalUsed / Math.max(1, massingLayers.totalFloors);
+                                    const addFloors = Math.max(1, Math.round(unusedArea / avgArea));
+                                    const nextFloors = massingLayers.totalFloors + addFloors;
+                                    setManualFloorsOverride(nextFloors);
+                                    onUpdateInputs('floorsAbove', nextFloors);
+                                }}
+                                className="flex-1 px-2.5 py-1 bg-emerald-600 text-white text-[11px] font-black border border-black hover:bg-emerald-700 transition-colors"
+                            >
+                                自動增加樓層
+                            </button>
                         ) : (
-                            <>
-                                <div className="text-xs text-stone-600 mb-3">還有 {formatNum(toPing(unusedArea))} 坪未使用，是否平均分配至所有地上樓層？</div>
-                                <div className="flex gap-2">
-                                    <button onClick={() => { setShowUnusedPrompt(false); handleAutoDistributeUnusedArea(); }} className="flex-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold shadow-sm hover:bg-emerald-700">是</button>
-                                    <button onClick={() => setShowUnusedPrompt(false)} className="flex-1 px-3 py-1.5 rounded-lg bg-white border border-stone-300 text-stone-600 text-xs font-bold hover:bg-stone-50">否</button>
-                                </div>
-                            </>
+                            <button
+                                onClick={() => {
+                                    setShowUnusedPrompt(false);
+                                    handleAutoDistributeUnusedArea();
+                                }}
+                                className="flex-1 px-2.5 py-1 bg-emerald-600 text-white text-[11px] font-black border border-black hover:bg-emerald-700 transition-colors"
+                            >
+                                平均分配至各層
+                            </button>
                         )}
+                        <button
+                            onClick={() => setShowUnusedPrompt(false)}
+                            className="px-2.5 py-1 bg-stone-100 text-stone-700 text-[11px] font-black border border-black hover:bg-stone-200 transition-colors"
+                        >
+                            稍後再說
+                        </button>
                     </div>
                 </div>
             )}
             <div className="w-full h-full relative flex flex-col flex-1">
-                <div ref={viewportRef} className={`flex-1 relative flex flex-col items-center justify-center perspective-1000 w-full h-full overflow-hidden transition-colors duration-500 touch-none ${isDragging ? 'cursor-grabbing' : (placementMode === 'independent' ? 'cursor-crosshair' : 'cursor-grab')}`} style={landscapeStyle} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleMouseUp} onClick={(e) => {
-                    if (placementMode === 'independent' && onConfirmPlacement) {
-                        onConfirmPlacement();
-                    } else {
-                        handleBgClick(e);
-                    }
-                }}>
-                    <div className="absolute top-4 left-4 z-40 flex flex-col gap-2">
-                        <div className="flex theme-panel-glass backdrop-blur rounded-lg border theme-border shadow-sm p-1 gap-1">
-                            <button onClick={() => setViewMode('3d')} className={`flex items-center gap-1 px-3 py-1.5 rounded text-xs font-bold transition-colors ${viewMode === '3d' ? 'theme-btn-active' : 'theme-text-muted hover:opacity-80'}`}><Box size={14} /> 3D 模擬</button>
-                            <button onClick={() => setViewMode('2d')} className={`flex items-center gap-1 px-3 py-1.5 rounded text-xs font-bold transition-colors ${viewMode === '2d' ? 'theme-btn-active' : 'theme-text-muted hover:opacity-80'}`}><LayoutTemplate size={14} /> 平面分析</button>
-                        </div>
-                    </div>
-                    <div className={controlBarClass}>
-                        <div className="theme-panel-glass p-1.5 rounded-full border shadow-lg flex flex-row items-center gap-2 backdrop-blur-md transition-colors duration-300">
-                            <button onClick={() => setIsDarkMode(prev => !prev)} className="p-2 rounded-full transition-all theme-text hover:text-[var(--text-accent)] hover:opacity-80" title={isDarkMode ? "切換為亮色模式" : "切換為夜間模式"}>{isDarkMode ? <Sun size={18} /> : <Moon size={18} />}</button>
-                            <button onClick={() => setShowSummaryPanel && setShowSummaryPanel(prev => !prev)} className="p-2 rounded-full transition-all theme-text hover:text-[var(--text-accent)] hover:opacity-80" title="開啟/關閉專案摘要"><PanelRightOpen size={18} /></button>
-                        </div>
-                    </div>
-                    {isConstraintMode && viewMode === '3d' && (<div className="absolute bottom-24 right-6 z-20 pointer-events-none"><div className="bg-emerald-600/90 text-white px-3 py-1.5 rounded-full shadow-lg text-sm font-bold flex items-center gap-2 backdrop-blur border border-emerald-400 animate-pulse"><CheckCircle2 size={16} fill="white" className="text-emerald-700" />鎖定編輯 (法規檢討中)</div></div>)}
-                    {viewMode === '2d' ? (
-                        <PlanAnalysis2D layers={floorLayers} baseWidthM={baseWidthM} baseDepthM={baseDepthM} onSelectFloor={(id) => { if (id === 'base' || id === 'excavation' || /^B\d+$/.test(id)) { setSelectedFloor({ id }); } else if (id) { const l = floorLayers.find(f => f.id === id); if (l) handleLayerClick({ stopPropagation: () => { } }, l); } }} selectedFloorId={selectedFloor?.id} isDarkMode={isDarkMode} onUpdateSetting={updateFloorSetting} floorSettings={floorSettings} inputs={inputs} scale3d={scale} basements={basements} onToggleBasement={toggleBasement} activeBasementArea={activeBasementArea} totalAllowedArea={parseFloat(res.totalCFA) || 0} showCheckLines={showCheckLines} volumeLimit={volumeLimit} parkingOn1F={parkingOn1F} onToggleParkingLocation={toggleParkingLocation} onClose={() => { if (selectedFloor) { setSelectedFloor(null); } else { setViewMode('3d'); } }} basePoints={basePoints} baseCurves={baseCurves} excavationPoints={excavationPoints} excavationCurves={excavationCurves} onAddRoad={onUpdateRoads} frontageIndices={frontageIndices} onUpdateFrontageIndices={setFrontageIndices} onAddFloor={handleAddFloor} onRemoveFloor={handleRemoveFloor} edgeTypes={edgeTypes} onUpdateEdgeTypes={updateEdgeTypes} view={view2D} onUpdateView={setView2D} onUpdateInputs={onUpdateInputs} onUpdateRoads={onUpdateRoads} onEditEnd={handleBaseEditEnd} unitSettings={unitSettings} onUpdateUnitSettings={setUnitSettings} onApplyAll={handleApplyAllFloors} floorsAboveValue={floorsAboveValue} onUpdateFloorsAbove={handleSetFloorsAbove} />
-                    ) : (
-                        <>
-                            {!isConstraintMode && <FloorInfoCard data={selectedFloor} isDarkMode={isDarkMode} onReset={resetFloor} isConstraintMode={isConstraintMode} inputs={inputs} />}
+                <div
+                    ref={viewportRef}
+                    className={`flex-1 relative flex flex-col items-center justify-center perspective-1000 w-full h-full overflow-hidden transition-colors duration-500 touch-none ${
+                        isDragging
+                            ? 'cursor-grabbing'
+                            : (placementMode === 'independent' || unifiedController.isDrawingSite || unifiedController.interactionMode === 'box_select')
+                                ? 'cursor-crosshair'
+                                : 'cursor-grab'
+                    }`}
+                    style={landscapeStyle}
+                    onMouseDown={(e) => {
+                        if (unifiedController.isDrawingSite) return;
+                        if (unifiedController.interactionMode === 'box_select') {
+                            unifiedController.startBoxSelect(e);
+                            return;
+                        }
+                        handleMouseDown(e);
+                    }}
+                    onMouseMove={(e) => {
+                        if (unifiedController.handlePointerMoveOnPlane(e)) return;
+                        handleMouseMove(e);
+                    }}
+                    onMouseUp={(e) => {
+                        if (unifiedController.handlePointerUpOnPlane(e)) return;
+                        handleMouseUp(e);
+                    }}
+                    onMouseLeave={(e) => {
+                        unifiedController.handlePointerUpOnPlane(e);
+                        handleMouseUp(e);
+                    }}
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleMouseUp}
+                    onClick={(e) => {
+                        if (unifiedController.isDrawingSite) return;
+                        if (e.target?.closest?.('[data-type]') || e.target?.closest?.('.no-context-menu')) return;
+                        const moveDist = Math.hypot(
+                            e.clientX - (pointerDownScreenPosRef.current.x ?? e.clientX),
+                            e.clientY - (pointerDownScreenPosRef.current.y ?? e.clientY)
+                        );
+                        if (moveDist > 6) return;
+                        if (placementMode === 'independent' && onConfirmPlacement) {
+                            onConfirmPlacement();
+                        } else if (selectedFloor) {
+                            handleBgClick(e);
+                        }
+                    }}
+                >
+                    {/* 桌機版頂部工具列；手機直向/橫向改由 UnifiedMobileSheet 單一浮層接管（但保留編輯繪圖 HUD） */}
+                    <UnifiedSceneHUD
+                        controller={unifiedController}
+                        isDarkMode={isDarkMode}
+                        setIsDarkMode={setIsDarkMode}
+                        isMobile={isMobileLayout}
+                        hideMobileNav={true}
+                        viewAngleX={viewAngleX}
+                        rotationZ={rotationZ}
+                        onToggleTopDownView={handleToggleTopDownView}
+                        primaryDragMode={primaryDragMode}
+                        onTogglePrimaryDragMode={() => setPrimaryDragMode(prev => prev === 'rotate' ? 'pan' : 'rotate')}
+                        projectLocalToScreen={projectLocalToScreen}
+                        aoMode={aoMode}
+                        onToggleAoMode={() => setAoMode(prev => !prev)}
+                        sunPathOpen={sunPathOpen}
+                        onToggleSunPath={handleToggleSunPath}
+                        isNightAO={isNightAO}
+                        onOpenCadastralImport={() => setCadastralModalOpen(true)}
+                        appActions={{
+                            ...appActions,
+                            onOpenSunComparison: () => setSunCompareOpen(true)
+                        }}
+                    />
 
-                            <div ref={compassRef} onPointerDown={handleCompassPointerDown} onPointerMove={handleCompassPointerMove} onPointerUp={handleCompassPointerUp} onPointerLeave={handleCompassPointerUp} className={`absolute bottom-8 right-6 z-20 pointer-events-auto transition-opacity duration-300 ${isDragging ? 'opacity-40' : 'opacity-100'}`}>
+                    {/* 手機直向／橫向單一浮層架構（任務 1、2、3、4） */}
+                    {isMobileLayout && !unifiedController.isDrawingSite && !selectedFloor && (
+                        <UnifiedMobileSheet
+                            isCompactLandscape={isCompactLandscape}
+                            isDarkMode={isDarkMode}
+                            isReadOnlyShare={appActions?.isReadOnlyShare}
+                            activeSite={activeSite}
+                            sites={sites}
+                            activeSiteIndex={appActions?.activeSiteIndex ?? 0}
+                            lots={activeSite?.lots || []}
+                            inputs={inputs}
+                            finalRes={res}
+                            params={appActions?.params || {}}
+                            massingSummary={{
+                                visualFloorsAbove,
+                                totalHeight: massingLayers.totalHeight || res.buildingHeight || 0,
+                                basePoints: normalizedData?.points || null
+                            }}
+                            activeTab={mobileActiveTab}
+                            setActiveTab={setMobileActiveTab}
+                            sheetHeight={mobileSheetHeight}
+                            setSheetHeight={setMobileSheetHeight}
+                            sunTime={sunTime}
+                            setSunTime={setSunTime}
+                            sunSeason={sunSeason}
+                            setSunSeason={setSunSeason}
+                            isSunPlaying={isSunPlaying}
+                            setIsSunPlaying={setIsSunPlaying}
+                            aoMode={aoMode}
+                            setAoMode={setAoMode}
+                            controller={unifiedController}
+                            viewAngleX={viewAngleX}
+                            onToggleTopDownView={handleToggleTopDownView}
+                            onOpenCadastralImport={() => setCadastralModalOpen(true)}
+                            appActions={{
+                                ...appActions,
+                                onViewportInsetsChange: setViewportInsets,
+                                onUpdateNorthAngle: (deg) => onUpdateInputs('northAngle', deg)
+                            }}
+                        />
+                    )}
+
+                    {/* 台灣地籍圖 / 本機 PDF・圖片・DXF 匯入選地號工作台 */}
+                    <CadastralImportModal
+                        isOpen={cadastralModalOpen}
+                        onClose={() => setCadastralModalOpen(false)}
+                        onImportSite={handleCadastralImport}
+                        nextSiteLabel={nextSiteLabel}
+                    />
+
+                    {/* 已疊合之本機地籍底圖微調小膠囊 */}
+                    {cadastralUnderlay && (
+                        <div
+                            className="absolute bottom-20 left-4 z-40 bg-white/95 backdrop-blur-md border-2 border-black shadow-[4px_4px_0_#000] px-2.5 py-1.5 flex items-center gap-2 text-[11px] font-black pointer-events-auto no-context-menu"
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                        >
+                            <span className="text-emerald-700 truncate max-w-[120px]" title={cadastralUnderlay.title}>
+                                🗺️ {cadastralUnderlay.title || '地籍底圖'}
+                            </span>
+                            <input
+                                type="range"
+                                min="0.1"
+                                max="1"
+                                step="0.05"
+                                value={cadastralUnderlay.opacity ?? 0.65}
+                                onChange={(e) => setCadastralUnderlay(prev => prev ? { ...prev, opacity: parseFloat(e.target.value) } : null)}
+                                className="w-16 accent-emerald-600"
+                                title="調整底圖透明度"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setCadastralUnderlay(prev => prev ? { ...prev, visible: !prev.visible } : null)}
+                                className="px-1.5 py-0.5 border border-black bg-stone-100 hover:bg-stone-200 text-[10px]"
+                            >
+                                {cadastralUnderlay.visible ? '隱藏' : '顯示'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setCadastralUnderlay(null)}
+                                className="p-0.5 text-stone-400 hover:text-red-600"
+                                title="移除底圖"
+                            >
+                                <X size={13} />
+                            </button>
+                        </div>
+                    )}
+
+                    {/* 日照與環境控制面板：僅桌機顯示獨立浮窗；手機已整合進單一 Bottom Sheet 的環境分頁 */}
+                    {!isMobileLayout && (
+                        <SunPathPanel
+                            isOpen={sunPathOpen}
+                            onClose={() => { setSunPathOpen(false); setIsSunPlaying(false); }}
+                            aoMode={aoMode}
+                            setAoMode={setAoMode}
+                            sunTime={sunTime}
+                            setSunTime={setSunTime}
+                            season={sunSeason}
+                            setSeason={setSunSeason}
+                            isPlaying={isSunPlaying}
+                            setIsPlaying={setIsSunPlaying}
+                            northAngle={inputs.northAngle || 0}
+                            onUpdateNorthAngle={(deg) => onUpdateInputs('northAngle', deg)}
+                            sunState={sunState}
+                            onOpenComparison={() => setSunCompareOpen(true)}
+                        />
+                    )}
+
+                    {/* 日照對比快照彈窗（桌機使用） */}
+                    <SunComparisonModal
+                        isOpen={sunCompareOpen}
+                        onClose={() => setSunCompareOpen(false)}
+                        basePoints={normalizedData.points}
+                        buildingHeight={massingLayers.totalHeight || res.buildingHeight || 15}
+                        northAngle={inputs.northAngle || 0}
+                        currentSeason={sunSeason}
+                        currentSunTime={sunTime}
+                        onSelectSnapshot={(targetSeason, targetHour) => {
+                            setIsSunPlaying(false);
+                            setSunSeason(targetSeason);
+                            setSunTime(targetHour);
+                            setAoMode(true);
+                        }}
+                        includeInReport={appActions?.includeSunInReport ?? true}
+                        onToggleIncludeInReport={appActions?.setIncludeSunInReport}
+                    />
+
+                    {/* 檢討模式圖例（紅色限制面說明 + 一鍵隱藏） */}
+                    {showCheckLines && (
+                        <div
+                            className={`absolute ${isMobileLayout ? 'top-14 left-3' : 'top-[72px] left-1/2 -translate-x-1/2'} z-[42] pointer-events-auto no-context-menu no-print`}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                        >
+                            <div className="yra-card rounded-full px-3 py-1.5 flex items-center gap-2 text-xs font-medium">
+                                <span className="flex items-center gap-1.5">
+                                    <span className="w-2.5 h-2.5 rounded-sm bg-[#DC2626]/20 border border-[#DC2626]" />
+                                    高度比限制面
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCheckLines && setShowCheckLines(false)}
+                                    className="px-2.5 py-0.5 rounded-full bg-[#171614] text-white text-xs hover:bg-[#E85D2A] transition-colors"
+                                >
+                                    隱藏
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 任務 5：3D 視窗左上單一小標籤（桌機於圖層抽屜展開時自動下移，避免與面板打架） */}
+                    <div
+                        className={`absolute pt-safe z-30 pointer-events-none select-none no-print transition-all duration-200 ${
+                            isCompactLandscape
+                                ? 'top-3 left-[72px]'
+                                : isMobileLayout
+                                    ? 'top-3 left-3'
+                                    : (appActions?.desktopLayerDockOpen ? 'top-[156px] left-[336px]' : 'top-[72px] left-[336px]')
+                        }`}
+                    >
+                        <div className="yra-card rounded-full px-3 py-1.5 text-xs font-medium yra-num whitespace-nowrap">
+                            {visualFloorsAbove} 層 · {formatNum(massingLayers.totalHeight || res.buildingHeight || 0, 1)}m
+                        </div>
+                    </div>
+
+                    {/* 任務 5：手機右上角只保留一行水平品牌與基地坪數（字級 12px，無重複漢堡按鈕） */}
+                    {isMobileLayout && (
+                        <div className="absolute top-3 right-3 pt-safe pr-safe z-30 pointer-events-none select-none no-print">
+                            <div className="yra-card rounded-full px-3 py-1.5 flex items-center gap-2 text-xs font-medium whitespace-nowrap">
+                                <span className="font-bold tracking-tight">YRA.</span>
+                                <span className="w-px h-3 bg-[#DDD8CE]" />
+                                <span className="yra-num">基地 {formatNum(toPing(res.base || 0), 2)} 坪</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {!isMobileLayout && (
+                        <div className={controlBarClass}>
+                            <div className="yra-card p-1.5 rounded-full flex flex-row items-center gap-1.5 transition-colors duration-300">
+                                <button onClick={() => setIsDarkMode(prev => !prev)} className="p-2 rounded-full transition-all theme-text hover:text-[var(--text-accent)] hover:opacity-80" title={isDarkMode ? "切換為淺色模式" : "切換為深色模式"}>{isDarkMode ? <Sun size={18} /> : <Moon size={18} />}</button>
+                                <button onClick={() => setShowSummaryPanel && setShowSummaryPanel(prev => !prev)} className="p-2 rounded-full transition-all theme-text hover:text-[var(--text-accent)] hover:opacity-80" title="開啟/關閉專案摘要視窗"><PanelRightOpen size={18} /></button>
+                            </div>
+                        </div>
+                    )}
+                    {isConstraintMode && (<div className="absolute bottom-24 right-6 z-20 pointer-events-none"><div className="bg-emerald-600/90 text-white px-3 py-1.5 rounded-full shadow-lg text-sm font-bold flex items-center gap-2 backdrop-blur border border-emerald-400 animate-pulse"><CheckCircle2 size={16} fill="white" className="text-emerald-700" />鎖定編輯 (法規檢討中)</div></div>)}
+                    <>
+                        {!isConstraintMode && <FloorInfoCard data={selectedFloor} isDarkMode={isDarkMode} onReset={resetFloor} isConstraintMode={isConstraintMode} inputs={inputs} />}
+
+                        {!isMobileLayout && (
+                            <div
+                                ref={compassRef}
+                                onPointerDown={handleCompassPointerDown}
+                                onPointerMove={handleCompassPointerMove}
+                                onPointerUp={handleCompassPointerUp}
+                                onPointerLeave={handleCompassPointerUp}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onMouseMove={(e) => e.stopPropagation()}
+                                onMouseUp={(e) => e.stopPropagation()}
+                                onTouchStart={(e) => e.stopPropagation()}
+                                onTouchMove={(e) => e.stopPropagation()}
+                                onClick={(e) => e.stopPropagation()}
+                                className={`absolute bottom-8 right-6 z-20 pointer-events-auto cursor-grab active:cursor-grabbing select-none no-context-menu transition-opacity duration-300 ${isDragging ? 'opacity-40' : 'opacity-100'}`}
+                                title="拖曳旋轉指南針設定基地北向（不影響畫面視角）"
+                            >
                                 <ArtisticCompass className="w-16 h-16" rotation={rotationZ - (inputs.northAngle || 0)} isDarkMode={isDarkMode} />
                             </div>
+                        )}
 
-                            {totalAreaViolation && <div className="absolute top-8 left-1/2 transform -translate-x-1/2 z-20 pointer-events-none animate-pulse"><div className="bg-red-500/90 text-white px-3 py-1.5 rounded-full shadow-lg text-sm font-bold flex items-center gap-2 backdrop-blur"><AlertTriangle size={16} fill="white" className="text-red-500" />總容積超限! (量體 {formatNum(toPing(massingLayers.currentTotalUsed))} &gt; 法定 {formatNum(toPing(volumeLimit))}坪)</div></div>}
-                            {isConstraintMode && unusedArea > 0.1 && (
-                                <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-20 pointer-events-none">
-                                    <div className="bg-emerald-600/90 text-white px-3 py-1.5 rounded-full shadow-lg text-sm font-bold flex items-center gap-2 backdrop-blur border border-emerald-400">
-                                        <CheckCircle2 size={16} fill="white" className="text-emerald-700" />
-                                        剩餘容積: {formatNum(toPing(unusedArea))} 坪 (可再增加樓層)
-                                    </div>
+                        {totalAreaViolation && <div className="absolute top-8 left-1/2 transform -translate-x-1/2 z-20 pointer-events-none animate-pulse"><div className="bg-red-500/90 text-white px-3 py-1.5 rounded-full shadow-lg text-sm font-bold flex items-center gap-2 backdrop-blur"><AlertTriangle size={16} fill="white" className="text-red-500" />總容積超限! (量體 {formatNum(toPing(massingLayers.currentTotalUsed))} &gt; 法定 {formatNum(toPing(volumeLimit))}坪)</div></div>}
+                        {isConstraintMode && unusedArea > 0.1 && (
+                            <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-20 pointer-events-none">
+                                <div className="bg-emerald-600/90 text-white px-3 py-1.5 rounded-full shadow-lg text-sm font-bold flex items-center gap-2 backdrop-blur border border-emerald-400">
+                                    <CheckCircle2 size={16} fill="white" className="text-emerald-700" />
+                                    剩餘容積: {formatNum(toPing(unusedArea))} 坪 (可再增加樓層)
                                 </div>
-                            )}
-                            <div className="relative w-full h-full flex items-center justify-center pointer-events-none" style={{ perspective: '2500px', transformStyle: 'preserve-3d' }}>
-                                <div style={{ transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0px) scale(${zoom}) rotateX(${viewAngleX}deg) rotateZ(${rotationZ}deg) translate3d(${focusOffset.x}px, ${focusOffset.y}px, ${focusOffset.z}px)`, transformStyle: 'preserve-3d', transition: viewTransition, willChange: 'transform', backfaceVisibility: 'hidden' }}>
-                                    {/* SketchUp-style Ground Plane forming horizon with Sky */}
-                                    <div
-                                        style={{
-                                            position: 'absolute',
-                                            top: '50%',
-                                            left: '50%',
-                                            width: '12000px',
-                                            height: '12000px',
-                                            marginLeft: '-6000px',
-                                            marginTop: '-6000px',
-                                            backgroundColor: groundColor,
-                                            transform: 'translateZ(-1px)',
-                                            pointerEvents: 'none',
-                                            transition: 'background-color 0.5s'
-                                        }}
-                                    />
-                                    <div style={{ position: 'absolute', top: '50%', left: '50%', marginLeft: -w/2, marginTop: -d/2, width: `${w}px`, height: `${d}px`, backgroundColor: 'transparent', transformStyle: 'preserve-3d', transition: 'background-color 0.5s', pointerEvents: 'auto' }} onMouseDown={handleMouseDown} onTouchStart={handleTouchStart}>
-                                    </div>
+                            </div>
+                        )}
+                        <div className="relative w-full h-full flex items-center justify-center pointer-events-none" style={{ perspective: '2500px', transformStyle: 'preserve-3d' }}>
+                            <div style={{ transform: `translate3d(${panOffset.x}px, ${panOffset.y}px, 0px) scale(${zoom}) rotateX(${viewAngleX}deg) rotateZ(${rotationZ}deg) translate3d(${focusOffset.x}px, ${focusOffset.y}px, ${focusOffset.z}px)`, transformStyle: 'preserve-3d', transition: viewTransition, willChange: 'transform', backfaceVisibility: 'hidden' }}>
+                                {/* SketchUp-style Ground Plane forming horizon with Sky */}
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        top: '50%',
+                                        left: '50%',
+                                        width: '12000px',
+                                        height: '12000px',
+                                        marginLeft: '-6000px',
+                                        marginTop: '-6000px',
+                                        backgroundColor: groundColor,
+                                        transform: 'translateZ(-1px)',
+                                        pointerEvents: 'none',
+                                        transition: 'background-color 0.5s'
+                                    }}
+                                />
+                                <div style={{ position: 'absolute', top: '50%', left: '50%', marginLeft: -w/2, marginTop: -d/2, width: `${w}px`, height: `${d}px`, backgroundColor: 'transparent', transformStyle: 'preserve-3d', transition: 'background-color 0.5s', pointerEvents: 'auto' }} onMouseDown={handleMouseDown} onTouchStart={handleTouchStart}>
+                                </div>
 
-                                    <div style={{ position: 'absolute', top: 0, left: 0, transformStyle: 'preserve-3d' }}>
-                                        {processedSites.map((ps, siteIdx) => {
-                                            const layout = ps.layout;
-                                            const isPrimary = ps.site.id === activeSiteId;
-                                            const isHovered = hoveredSiteId === ps.site.id;
-                                            const baseRotDeg = ((layout.rotation || 0) * 180) / Math.PI;
-                                            const roofZ = (ps.massing.totalHeight || 0) * scale;
-                                            const labelZ = roofZ + 28 + (siteIdx % 2) * 14;
+                                <div style={{ position: 'absolute', top: 0, left: 0, transformStyle: 'preserve-3d' }}>
+                                    {processedSites.map((ps, siteIdx) => {
+                                        const layout = ps.layout;
+                                        const isPrimary = ps.site.id === activeSiteId;
+                                        const isHovered = hoveredSiteId === ps.site.id;
+                                        const baseRotDeg = ((layout.rotation || 0) * 180) / Math.PI;
+                                        const roofZ = (ps.massing.totalHeight || 0) * scale;
+                                        const labelZ = roofZ + 28 + (siteIdx % 2) * 14;
 
-                                            return (
-                                                <div 
-                                                    key={ps.site.id} 
-                                                    onMouseEnter={() => setHoveredSiteId(ps.site.id)}
-                                                    onMouseLeave={() => setHoveredSiteId(null)}
-                                                    style={{
-                                                        position: 'absolute',
-                                                        top: '50%', left: '50%',
-                                                        width: w, height: d,
-                                                        marginLeft: -w/2, marginTop: -d/2,
-                                                        transform: `translate3d(${(layout.x - projectBounds.center.x) * scale}px, ${(layout.y - projectBounds.center.y) * scale}px, 0) rotateZ(${layout.rotation}rad)`,
-                                                        transformStyle: 'preserve-3d'
-                                                    }}
-                                                >
-                                                    {ps.normalized.points && ps.normalized.points.length > 0 && (
-                                                        <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible', position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 1 }}>
+                                        return (
+                                            <div 
+                                                key={ps.site.id} 
+                                                onMouseEnter={() => setHoveredSiteId(ps.site.id)}
+                                                onMouseLeave={() => setHoveredSiteId(null)}
+                                                style={{
+                                                    position: 'absolute',
+                                                    top: '50%', left: '50%',
+                                                    width: w, height: d,
+                                                    marginLeft: -w/2, marginTop: -d/2,
+                                                    transform: `translate3d(${(layout.x - projectBounds.center.x) * scale}px, ${(layout.y - projectBounds.center.y) * scale}px, 0) rotateZ(${layout.rotation}rad)`,
+                                                    transformStyle: 'preserve-3d'
+                                                }}
+                                            >
+                                                {/* 本機上傳之地籍圖 / 都計圖 1:1 貼地參考底圖（修正 maxWidth: none 確保與基地多邊形 100% 精準重合） */}
+                                                {isPrimary && cadastralUnderlay && cadastralUnderlay.visible && cadastralUnderlay.dataUrl && (
+                                                    <img
+                                                        src={cadastralUnderlay.dataUrl}
+                                                        alt="Cadastral Underlay"
+                                                        draggable={false}
+                                                        style={{
+                                                            position: 'absolute',
+                                                            left: '50%',
+                                                            top: '50%',
+                                                            width: `${cadastralUnderlay.widthM * scale}px`,
+                                                            height: `${cadastralUnderlay.heightM * scale}px`,
+                                                            maxWidth: 'none',
+                                                            maxHeight: 'none',
+                                                            marginLeft: `${-(cadastralUnderlay.anchorXM !== undefined ? cadastralUnderlay.anchorXM : (cadastralUnderlay.widthM / 2 - (cadastralUnderlay.offsetXM || 0))) * scale}px`,
+                                                            marginTop: `${-(cadastralUnderlay.anchorYM !== undefined ? cadastralUnderlay.anchorYM : (cadastralUnderlay.heightM / 2 - (cadastralUnderlay.offsetYM || 0))) * scale}px`,
+                                                            opacity: cadastralUnderlay.opacity ?? 0.65,
+                                                            transform: 'translateZ(-0.2px)',
+                                                            pointerEvents: 'none',
+                                                            zIndex: 0
+                                                        }}
+                                                    />
+                                                )}
+                                                {/* 夜間 AO 模式：基地專屬舞台聚光燈光暈（如附圖 2 照亮主基地與建築量體，周圍暗沉對比） */}
+                                                {isNightAO && isPrimary && (
+                                                    <div
+                                                        style={{
+                                                            position: 'absolute',
+                                                            left: '50%',
+                                                            top: '50%',
+                                                            width: `${Math.max(w, d) * 3.2}px`,
+                                                            height: `${Math.max(w, d) * 3.2}px`,
+                                                            marginLeft: `${-Math.max(w, d) * 1.6}px`,
+                                                            marginTop: `${-Math.max(w, d) * 1.6}px`,
+                                                            borderRadius: '9999px',
+                                                            background: 'radial-gradient(circle, rgba(235, 240, 248, 0.34) 0%, rgba(190, 200, 215, 0.16) 36%, rgba(13, 15, 20, 0) 70%)',
+                                                            transform: 'translateZ(-0.3px)',
+                                                            pointerEvents: 'none',
+                                                            zIndex: 0
+                                                        }}
+                                                    />
+                                                )}
+                                                {ps.normalized.points && ps.normalized.points.length > 0 && (
+                                                    <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible', position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 1 }}>
+                                                        <path
+                                                            d={generateSvgPath(ps.normalized.points, ps.normalized.curves, scale, w / 2, d / 2)}
+                                                            fill={aoMode ? (isNightAO ? (isPrimary ? 'rgba(186, 194, 206, 0.82)' : 'rgba(32, 36, 44, 0.72)') : 'rgba(248, 250, 252, 0.94)') : (isDarkMode ? 'rgba(30, 41, 59, 0.45)' : 'rgba(255, 255, 255, 0.55)')}
+                                                            stroke={aoMode ? (isNightAO ? 'rgba(15, 18, 24, 0.8)' : 'rgba(30, 35, 42, 0.55)') : (isPrimary ? '#0284c7' : (isDarkMode ? '#64748b' : '#78716c'))}
+                                                            strokeWidth={isPrimary ? '2' : '1.5'}
+                                                            style={{ pointerEvents: (unifiedController.isDrawingSite || (isPrimary && selectedFloor)) ? 'none' : 'auto', cursor: 'pointer' }}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                const moveDist = Math.hypot(
+                                                                    e.clientX - (pointerDownScreenPosRef.current.x ?? e.clientX),
+                                                                    e.clientY - (pointerDownScreenPosRef.current.y ?? e.clientY)
+                                                                );
+                                                                if (moveDist > 6) return;
+                                                                if (!isPrimary) {
+                                                                    const sIdx = sites.findIndex(s => s.id === ps.site.id);
+                                                                    if (sIdx !== -1 && typeof setActiveSiteIndex === 'function') {
+                                                                        setActiveSiteIndex(sIdx);
+                                                                    }
+                                                                }
+                                                                setSelectedFloor({ id: 'base' });
+                                                                setFocusOffset({ x: 0, y: 0, z: 0 });
+                                                            }}
+                                                        />
+                                                    </svg>
+                                                )}
+                                                {/* 如實呈現從地籍圖／PDF／DXF 點選匯入之道路原形狀，並與原始道路完全統一視覺樣式、人行道、平面樹穴、行道樹、行人與車輛動畫 */}
+                                                {isPrimary && importedRoadPolygons.length > 0 ? (() => {
+                                                    const sitePtsNorm = ps.normalized?.points || [];
+                                                    const siteCentroid = sitePtsNorm.length >= 3 ? getPolygonCentroid(sitePtsNorm) : { x: 0, y: 0 };
+                                                    const siteInForRoad = ps.site.inputs || inputs;
+                                                    const siteRoadsList = getSiteRoads(ps.site);
+                                                    const sFrontM = parseFloat(siteInForRoad.frontYardDepth) || 0;
+                                                    const sArcadeM = (siteInForRoad.frontYardDepth == 0 && siteInForRoad.arcadeDepth) ? parseFloat(siteInForRoad.arcadeDepth) : 0;
+                                                    const siteFrontDepthM = sArcadeM > 0 ? sArcadeM : sFrontM;
+                                                    const vTileSize = Math.max(7, Math.min(15, scale * 0.95));
+                                                    const vSidewalkPatternId = `imp-road-sw-tile-${ps.site.id}`;
+                                                    const siteWorldRotDeg = rotationZ + ((ps.layout?.rotation || 0) * 180 / Math.PI);
+
+                                                    // 收集所有基地多邊形（轉至主基地局部座標系），與原始 renderRoads 採用完全相同的多基地避樹檢核
+                                                    const allSitePolysInLocal = [];
+                                                    processedSites.forEach(otherPs => {
+                                                        const oPts = otherPs?.normalized?.points || [];
+                                                        if (oPts.length < 3) return;
+                                                        if (otherPs.site.id === ps.site.id) {
+                                                            allSitePolysInLocal.push(oPts);
+                                                        } else {
+                                                            const dLayoutX = (otherPs.layout?.x || 0) - (ps.layout?.x || 0);
+                                                            const dLayoutY = (otherPs.layout?.y || 0) - (ps.layout?.y || 0);
+                                                            const cosO = Math.cos(otherPs.layout?.rotation || 0);
+                                                            const sinO = Math.sin(otherPs.layout?.rotation || 0);
+                                                            const cosP = Math.cos(-(ps.layout?.rotation || 0));
+                                                            const sinP = Math.sin(-(ps.layout?.rotation || 0));
+                                                            allSitePolysInLocal.push(oPts.map(pt => {
+                                                                const wx = dLayoutX + (pt.x * cosO - pt.y * sinO);
+                                                                const wy = dLayoutY + (pt.x * sinO + pt.y * cosO);
+                                                                return { x: wx * cosP - wy * sinP, y: wx * sinP + wy * cosP };
+                                                            }));
+                                                        }
+                                                    });
+
+                                                    const isPointInsideAnySite = (pt, marginM = 0.4) => {
+                                                        for (const poly of allSitePolysInLocal) {
+                                                            if (pointInPolygon(pt, poly)) return true;
+                                                            if (marginM > 0) {
+                                                                const dirs = [
+                                                                    { x: marginM, y: 0 }, { x: -marginM, y: 0 },
+                                                                    { x: 0, y: marginM }, { x: 0, y: -marginM },
+                                                                    { x: marginM * 0.7, y: marginM * 0.7 }, { x: -marginM * 0.7, y: marginM * 0.7 },
+                                                                    { x: marginM * 0.7, y: -marginM * 0.7 }, { x: -marginM * 0.7, y: -marginM * 0.7 }
+                                                                ];
+                                                                for (const dVec of dirs) {
+                                                                    if (pointInPolygon({ x: pt.x + dVec.x, y: pt.y + dVec.y }, poly)) return true;
+                                                                }
+                                                            }
+                                                        }
+                                                        return false;
+                                                    };
+
+                                                    // 與原始道路完全一致的 2D 平面行道樹三色階（樹穴 + 雙層樹冠 + 枝幹十字線）
+                                                    const planTreeTiers = isDarkMode
+                                                        ? [
+                                                            { outerFill: 'rgba(16, 185, 129, 0.38)', outerStroke: '#34d399', innerFill: 'rgba(52, 211, 153, 0.40)', innerStroke: 'rgba(167, 243, 208, 0.65)', dot: '#a7f3d0' },
+                                                            { outerFill: 'rgba(34, 197, 94, 0.36)', outerStroke: '#4ade80', innerFill: 'rgba(134, 239, 172, 0.38)', innerStroke: 'rgba(220, 252, 231, 0.65)', dot: '#bbf7d0' },
+                                                            { outerFill: 'rgba(132, 204, 22, 0.36)', outerStroke: '#a3e635', innerFill: 'rgba(190, 242, 100, 0.38)', innerStroke: 'rgba(236, 252, 203, 0.65)', dot: '#d9f99d' }
+                                                        ]
+                                                        : [
+                                                            { outerFill: 'rgba(5, 150, 105, 0.34)', outerStroke: '#047857', innerFill: 'rgba(16, 185, 129, 0.36)', innerStroke: 'rgba(6, 95, 70, 0.50)', dot: '#065f46' },
+                                                            { outerFill: 'rgba(22, 163, 74, 0.32)', outerStroke: '#15803d', innerFill: 'rgba(74, 222, 128, 0.35)', innerStroke: 'rgba(20, 83, 45, 0.48)', dot: '#14532d' },
+                                                            { outerFill: 'rgba(101, 163, 13, 0.32)', outerStroke: '#4d7c0f', innerFill: 'rgba(163, 230, 53, 0.36)', innerStroke: 'rgba(54, 83, 20, 0.48)', dot: '#365314' }
+                                                        ];
+                                                    const treePlanR = Math.max(4.2, 1.25 * scale);
+                                                    const pitHalf = Math.max(2.6, 0.75 * scale);
+
+                                                    const impRoadPaths = [];
+                                                    const impSvgLabels = [];
+                                                    const impStreetTrees = [];
+                                                    const impWalkPaths = [];
+                                                    const impVehicleLanes = [];
+
+                                                    // 與原始 renderRoads 完全一致的道路柏油填色、虛線邊界與中線樣式
+                                                    const roadFill = aoMode
+                                                        ? (isNightAO ? 'rgba(22, 25, 31, 0.92)' : 'rgba(205, 210, 218, 0.92)')
+                                                        : (isDarkMode ? 'rgba(71, 85, 105, 0.55)' : 'rgba(148, 163, 184, 0.55)');
+                                                    const roadStroke = aoMode
+                                                        ? (isNightAO ? 'rgba(42, 48, 58, 0.75)' : 'rgba(130, 138, 150, 0.72)')
+                                                        : (isDarkMode ? '#64748b' : '#94a3b8');
+                                                    const roadCenterStroke = aoMode
+                                                        ? (isNightAO ? 'rgba(75, 85, 99, 0.35)' : 'rgba(255, 255, 255, 0.65)')
+                                                        : (isDarkMode ? 'rgba(226, 232, 240, 0.35)' : 'rgba(255, 255, 255, 0.7)');
+
+                                                    // 沿連續折線依弧長採樣位置與平滑外法向量
+                                                    const buildChainData = (edgeList) => {
+                                                        if (!edgeList || edgeList.length === 0) return null;
+                                                        const pts = [edgeList[0].p1, ...edgeList.map(e => e.p2)];
+                                                        const segN = edgeList.map(e => e.outN);
+                                                        const vertN = pts.map((_, i) => {
+                                                            if (i === 0) return segN[0];
+                                                            if (i === pts.length - 1) return segN[segN.length - 1];
+                                                            const nx = segN[i - 1].x + segN[i].x;
+                                                            const ny = segN[i - 1].y + segN[i].y;
+                                                            const l = Math.hypot(nx, ny);
+                                                            return l > 1e-6 ? { x: nx / l, y: ny / l } : segN[i];
+                                                        });
+                                                        const cumLen = [0];
+                                                        let totalLen = 0;
+                                                        for (let i = 0; i < pts.length - 1; i++) {
+                                                            totalLen += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+                                                            cumLen.push(totalLen);
+                                                        }
+                                                        return { pts, vertN, cumLen, totalLen };
+                                                    };
+
+                                                    const reverseChainData = (ch) => {
+                                                        if (!ch) return null;
+                                                        const pts = [...ch.pts].reverse();
+                                                        const vertN = [...ch.vertN].reverse();
+                                                        const cumLen = [0];
+                                                        let totalLen = 0;
+                                                        for (let i = 0; i < pts.length - 1; i++) {
+                                                            totalLen += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+                                                            cumLen.push(totalLen);
+                                                        }
+                                                        return { pts, vertN, cumLen, totalLen };
+                                                    };
+
+                                                    const sampleChainAtDist = (ch, distM) => {
+                                                        const clamped = Math.max(0, Math.min(ch.totalLen, distM));
+                                                        let sIdx = 0;
+                                                        for (let i = 0; i < ch.cumLen.length - 1; i++) {
+                                                            if (clamped >= ch.cumLen[i] && clamped <= ch.cumLen[i + 1]) {
+                                                                sIdx = i;
+                                                                break;
+                                                            }
+                                                        }
+                                                        const s0 = ch.cumLen[sIdx];
+                                                        const s1 = ch.cumLen[sIdx + 1];
+                                                        const u = (clamped - s0) / Math.max(1e-6, s1 - s0);
+                                                        const pA = ch.pts[sIdx];
+                                                        const pB = ch.pts[sIdx + 1];
+                                                        const nA = ch.vertN[sIdx];
+                                                        const nB = ch.vertN[sIdx + 1];
+                                                        const nx = nA.x + (nB.x - nA.x) * u;
+                                                        const ny = nA.y + (nB.y - nA.y) * u;
+                                                        const nLen = Math.hypot(nx, ny) || 1;
+                                                        return {
+                                                            x: pA.x + (pB.x - pA.x) * u,
+                                                            y: pA.y + (pB.y - pA.y) * u,
+                                                            outUx: nx / nLen,
+                                                            outUy: ny / nLen
+                                                        };
+                                                    };
+
+                                                    // 取得基地臨路邊方向向量與中點，作為道路行進方向基準
+                                                    let frontageDir = null;
+                                                    let frontageMid = siteCentroid;
+                                                    if (sitePtsNorm.length >= 3) {
+                                                        const fIdxArr = Array.from(ps.frontIndices || frontageIndices || []);
+                                                        const fIdx = fIdxArr.find(idx => idx >= 0 && idx < sitePtsNorm.length);
+                                                        if (fIdx !== undefined) {
+                                                            const fp1 = sitePtsNorm[fIdx];
+                                                            const fp2 = sitePtsNorm[(fIdx + 1) % sitePtsNorm.length];
+                                                            const fLen = Math.hypot(fp2.x - fp1.x, fp2.y - fp1.y);
+                                                            if (fLen > 1e-4) {
+                                                                frontageDir = { x: (fp2.x - fp1.x) / fLen, y: (fp2.y - fp1.y) / fLen };
+                                                                frontageMid = { x: (fp1.x + fp2.x) / 2, y: (fp1.y + fp2.y) / 2 };
+                                                            }
+                                                        }
+                                                    }
+
+                                                    importedRoadPolygons.forEach((rp, rIdx) => {
+                                                        const rawPts = rp.points || [];
+                                                        // 過濾過近重複頂點，避免退化邊影響法向量
+                                                        const rPts = [];
+                                                        for (let i = 0; i < rawPts.length; i++) {
+                                                            const p = rawPts[i];
+                                                            const prev = rPts[rPts.length - 1];
+                                                            if (!prev || Math.hypot(p.x - prev.x, p.y - prev.y) > 0.08) {
+                                                                rPts.push(p);
+                                                            }
+                                                        }
+                                                        if (rPts.length > 2 && Math.hypot(rPts[0].x - rPts[rPts.length - 1].x, rPts[0].y - rPts[rPts.length - 1].y) <= 0.08) {
+                                                            rPts.pop();
+                                                        }
+                                                        if (rPts.length < 3) return;
+
+                                                        const M = rPts.length;
+                                                        const rCentroid = getPolygonCentroid(rPts);
+
+                                                        // 1. 繪製原形狀道路柏油面（樣式完全對齊原始道路）
+                                                        impRoadPaths.push(
                                                             <path
-                                                                d={generateSvgPath(ps.normalized.points, ps.normalized.curves, scale, w / 2, d / 2)}
-                                                                fill={isDarkMode ? 'rgba(30, 41, 59, 0.45)' : 'rgba(255, 255, 255, 0.55)'}
-                                                                stroke={isPrimary ? '#0284c7' : (isDarkMode ? '#64748b' : '#78716c')}
-                                                                strokeWidth={isPrimary ? '2' : '1.5'}
+                                                                key={`imp-road-body-${rp.id}`}
+                                                                d={generateSvgPath(rPts, null, scale, w / 2, d / 2)}
+                                                                fill={roadFill}
+                                                                stroke={roadStroke}
+                                                                strokeWidth={aoMode ? '1.1' : '1.5'}
+                                                                strokeDasharray={aoMode ? 'none' : '5,5'}
+                                                                strokeLinejoin="round"
                                                             />
-                                                        </svg>
-                                                    )}
-                                                    {renderRoads(ps)}
-                                                    {renderReviewSurfaces(ps)}
-                                                    {renderPolygonSetbacks(ps)}
+                                                        );
+
+                                                        // 2. 計算每條邊並用 pointInPolygon 實測驗證 outN 100% 朝道路外側（不受繞向與凹折影響）
+                                                        const edges = rPts.map((p1, i) => {
+                                                            const p2 = rPts[(i + 1) % M];
+                                                            const dx = p2.x - p1.x;
+                                                            const dy = p2.y - p1.y;
+                                                            const len = Math.hypot(dx, dy);
+                                                            const ux = len > 1e-6 ? dx / len : 1;
+                                                            const uy = len > 1e-6 ? dy / len : 0;
+                                                            const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+                                                            let nx = uy;
+                                                            let ny = -ux;
+                                                            const probeOut = { x: mid.x + nx * 0.12, y: mid.y + ny * 0.12 };
+                                                            const probeIn = { x: mid.x - nx * 0.12, y: mid.y - ny * 0.12 };
+                                                            const outInside = pointInPolygon(probeOut, rPts);
+                                                            const inInside = pointInPolygon(probeIn, rPts);
+                                                            if (outInside && !inInside) {
+                                                                nx = -nx;
+                                                                ny = -ny;
+                                                            } else if (outInside === inInside) {
+                                                                // 退化細長邊回退至遠離質心方向
+                                                                if (nx * (mid.x - rCentroid.x) + ny * (mid.y - rCentroid.y) < 0) {
+                                                                    nx = -nx;
+                                                                    ny = -ny;
+                                                                }
+                                                            }
+                                                            return { i, p1, p2, dx, dy, len, ux, uy, mid, outN: { x: nx, y: ny } };
+                                                        });
+
+                                                        const validEdges = edges.filter(e => e.len > 0.5);
+                                                        if (validEdges.length === 0) return;
+
+                                                        // 3. 優先挑選「與基地臨路邊平行且最貼近基地」之邊作為主路緣種子
+                                                        let primaryEdge = null;
+                                                        if (frontageDir) {
+                                                            const parallelToFront = validEdges
+                                                                .filter(e => Math.abs(e.ux * frontageDir.x + e.uy * frontageDir.y) > 0.55)
+                                                                .sort((a, b) => distToSegment(frontageMid, a.p1, a.p2) - distToSegment(frontageMid, b.p1, b.p2));
+                                                            primaryEdge = parallelToFront[0] || null;
+                                                        }
+                                                        if (!primaryEdge) {
+                                                            primaryEdge = [...validEdges].sort((a, b) => b.len - a.len)[0];
+                                                        }
+
+                                                        // 4. 沿相鄰順角 (< 63°) 串接成完整的左／右兩條路緣鏈（完整支援直線、梯形與彎曲道路）
+                                                        const growCurbChain = (seedEdge, forbiddenSet) => {
+                                                            const chain = [seedEdge];
+                                                            const used = new Set([seedEdge.i]);
+                                                            // 向前延伸
+                                                            let cur = seedEdge;
+                                                            while (used.size + forbiddenSet.size < M) {
+                                                                const nextIdx = (cur.i + 1) % M;
+                                                                if (used.has(nextIdx) || forbiddenSet.has(nextIdx)) break;
+                                                                const nextE = edges[nextIdx];
+                                                                if (nextE.len > 0.05 && (cur.ux * nextE.ux + cur.uy * nextE.uy) > 0.45) {
+                                                                    chain.push(nextE);
+                                                                    used.add(nextIdx);
+                                                                    cur = nextE;
+                                                                } else {
+                                                                    break;
+                                                                }
+                                                            }
+                                                            // 向後延伸
+                                                            cur = seedEdge;
+                                                            while (used.size + forbiddenSet.size < M) {
+                                                                const prevIdx = (cur.i - 1 + M) % M;
+                                                                if (used.has(prevIdx) || forbiddenSet.has(prevIdx)) break;
+                                                                const prevE = edges[prevIdx];
+                                                                if (prevE.len > 0.05 && (prevE.ux * cur.ux + prevE.uy * cur.uy) > 0.45) {
+                                                                    chain.unshift(prevE);
+                                                                    used.add(prevIdx);
+                                                                    cur = prevE;
+                                                                } else {
+                                                                    break;
+                                                                }
+                                                            }
+                                                            return { chain, used };
+                                                        };
+
+                                                        const { chain: sideAEdges, used: sideASet } = growCurbChain(primaryEdge, new Set());
+                                                        let chainA = buildChainData(sideAEdges);
+
+                                                        // 尋找對向路緣種子（不在 sideA 內，且外法向朝向對側或與主邊平行）
+                                                        const oppCandidates = validEdges.filter(e => !sideASet.has(e.i));
+                                                        const oppSeed =
+                                                            oppCandidates
+                                                                .filter(e => (e.outN.x * primaryEdge.outN.x + e.outN.y * primaryEdge.outN.y) < -0.25)
+                                                                .sort((a, b) => b.len - a.len)[0]
+                                                            || oppCandidates
+                                                                .filter(e => Math.abs(e.ux * primaryEdge.ux + e.uy * primaryEdge.uy) > 0.55)
+                                                                .sort((a, b) => b.len - a.len)[0]
+                                                            || null;
+
+                                                        let chainB = null;
+                                                        if (oppSeed) {
+                                                            const { chain: sideBEdges } = growCurbChain(oppSeed, sideASet);
+                                                            chainB = buildChainData(sideBEdges);
+                                                            // 確保 chainA 與 chainB 沿同一行進方向排列，以便平滑插值道路中線與雙向車道
+                                                            if (chainA && chainB) {
+                                                                const vecA = {
+                                                                    x: chainA.pts[chainA.pts.length - 1].x - chainA.pts[0].x,
+                                                                    y: chainA.pts[chainA.pts.length - 1].y - chainA.pts[0].y
+                                                                };
+                                                                const vecB = {
+                                                                    x: chainB.pts[chainB.pts.length - 1].x - chainB.pts[0].x,
+                                                                    y: chainB.pts[chainB.pts.length - 1].y - chainB.pts[0].y
+                                                                };
+                                                                if (vecA.x * vecB.x + vecA.y * vecB.y < 0) {
+                                                                    chainB = reverseChainData(chainB);
+                                                                }
+                                                            }
+                                                        }
+
+                                                        if (!chainA || chainA.totalLen < 1.0) return;
+
+                                                        // 5. 依兩側路緣鏈高密度插值連續道路中線與雙向車道（支援彎曲道路）
+                                                        let avgRoadWidthM = rp.widthM || 10;
+                                                        let labelPos = rCentroid;
+                                                        let labelTan = { x: primaryEdge.ux, y: primaryEdge.uy };
+
+                                                        if (chainB && chainB.totalLen >= 1.0) {
+                                                            const numCL = Math.max(12, Math.ceil(Math.max(chainA.totalLen, chainB.totalLen) / 2.5));
+                                                            const centerPts = [];
+                                                            const lane1Pts = [];
+                                                            const lane2Pts = [];
+                                                            let widthSum = 0;
+
+                                                            for (let k = 0; k <= numCL; k++) {
+                                                                const u = k / numCL;
+                                                                const pA = sampleChainAtDist(chainA, u * chainA.totalLen);
+                                                                const pB = sampleChainAtDist(chainB, u * chainB.totalLen);
+                                                                widthSum += Math.hypot(pB.x - pA.x, pB.y - pA.y);
+                                                                centerPts.push({ x: (pA.x + pB.x) / 2, y: (pA.y + pB.y) / 2 });
+                                                                lane1Pts.push({ x: pA.x * 0.73 + pB.x * 0.27, y: pA.y * 0.73 + pB.y * 0.27 });
+                                                                lane2Pts.push({ x: pA.x * 0.27 + pB.x * 0.73, y: pA.y * 0.27 + pB.y * 0.73 });
+                                                            }
+                                                            avgRoadWidthM = widthSum / (numCL + 1);
+
+                                                            let centerPathD = '';
+                                                            centerPts.forEach((pt, idx) => {
+                                                                centerPathD += `${idx === 0 ? 'M' : 'L'} ${w / 2 + pt.x * scale} ${d / 2 + pt.y * scale} `;
+                                                            });
+                                                            impRoadPaths.push(
+                                                                <path
+                                                                    key={`imp-road-cl-${rp.id}`}
+                                                                    d={centerPathD.trim()}
+                                                                    fill="none"
+                                                                    stroke={roadCenterStroke}
+                                                                    strokeWidth="1.2"
+                                                                    strokeDasharray="8,6"
+                                                                />
+                                                            );
+
+                                                            if (avgRoadWidthM >= 5) {
+                                                                impVehicleLanes.push(lane1Pts, [...lane2Pts].reverse());
+                                                            } else {
+                                                                impVehicleLanes.push(centerPts);
+                                                            }
+
+                                                            const midK = Math.floor(centerPts.length / 2);
+                                                            labelPos = centerPts[midK];
+                                                            const pPrev = centerPts[Math.max(0, midK - 1)];
+                                                            const pNext = centerPts[Math.min(centerPts.length - 1, midK + 1)];
+                                                            const tLen = Math.hypot(pNext.x - pPrev.x, pNext.y - pPrev.y);
+                                                            if (tLen > 1e-5) {
+                                                                labelTan = { x: (pNext.x - pPrev.x) / tLen, y: (pNext.y - pPrev.y) / tLen };
+                                                            }
+                                                        }
+
+                                                        // 6. 沿道路兩側路緣鏈繪製與基地前院一體的石材人行道、平面樹穴與樹冠圖示、2.5D 行道樹與貫通兩端之行人動線
+                                                        const midA = sampleChainAtDist(chainA, chainA.totalLen * 0.5);
+                                                        const midB = chainB ? sampleChainAtDist(chainB, chainB.totalLen * 0.5) : null;
+                                                        const distAToSite = Math.hypot(midA.x - siteCentroid.x, midA.y - siteCentroid.y);
+                                                        const distBToSite = midB ? Math.hypot(midB.x - siteCentroid.x, midB.y - siteCentroid.y) : Infinity;
+
+                                                        [
+                                                            { ch: chainA, isSiteSide: distAToSite <= distBToSite },
+                                                            chainB ? { ch: chainB, isSiteSide: distBToSite < distAToSite } : null
+                                                        ].filter(Boolean).forEach(({ ch, isSiteSide }, sIdx) => {
+                                                            const effectiveSidewalkW = (isSiteSide && siteFrontDepthM > 0) ? siteFrontDepthM : 2.4;
+                                                            const treeCurbOffsetM = Math.min(1.15, Math.max(0.65, effectiveSidewalkW * 0.5));
+                                                            const walkCenterOffsetM = (isSiteSide && siteFrontDepthM > 0)
+                                                                ? Math.min(Math.max(0.7, effectiveSidewalkW * 0.5), Math.max(0.7, effectiveSidewalkW - 0.35))
+                                                                : treeCurbOffsetM;
+
+                                                            const sampleStepM = 0.5;
+                                                            const numSteps = Math.max(4, Math.ceil(ch.totalLen / sampleStepM));
+                                                            const samples = [];
+                                                            for (let k = 0; k <= numSteps; k++) {
+                                                                const distM = (k / numSteps) * ch.totalLen;
+                                                                const { x, y, outUx, outUy } = sampleChainAtDist(ch, distM);
+                                                                const curbPt = { x, y };
+                                                                const midPt = { x: x + outUx * walkCenterOffsetM, y: y + outUy * walkCenterOffsetM };
+                                                                const backPt = { x: x + outUx * effectiveSidewalkW, y: y + outUy * effectiveSidewalkW };
+                                                                const insideSite = (isSiteSide && siteFrontDepthM > 0)
+                                                                    ? false
+                                                                    : (isPointInsideAnySite(midPt, 0.05) || isPointInsideAnySite(backPt, 0.05));
+                                                                samples.push({ distM, curbPt, midPt, backPt, valid: !insideSite });
+                                                            }
+
+                                                            // 貫通道路起點至終點之連續行人漫步動線
+                                                            if (samples.length >= 2) {
+                                                                impWalkPaths.push(samples.map(sp => (sp.valid ? sp.midPt : sp.curbPt)));
+                                                            }
+
+                                                            // 將連續有效區段聚合為人行道鋪面帶
+                                                            const validRuns = [];
+                                                            let curRun = [];
+                                                            samples.forEach((sp, idx) => {
+                                                                if (sp.valid) {
+                                                                    if (curRun.length === 0 && idx > 0 && !samples[idx - 1].valid) {
+                                                                        curRun.push(samples[idx - 1]);
+                                                                    }
+                                                                    curRun.push(sp);
+                                                                } else {
+                                                                    if (curRun.length >= 2) {
+                                                                        curRun.push(sp);
+                                                                        validRuns.push(curRun);
+                                                                    }
+                                                                    curRun = [];
+                                                                }
+                                                            });
+                                                            if (curRun.length >= 2) validRuns.push(curRun);
+
+                                                            validRuns.forEach((run, runIdx) => {
+                                                                const runStartM = run[0].distM;
+                                                                const runEndM = run[run.length - 1].distM;
+                                                                const runLenM = runEndM - runStartM;
+                                                                if (runLenM < 1.0) return;
+
+                                                                let swPathD = '';
+                                                                let curbLineD = '';
+                                                                let outerBorderD = '';
+                                                                run.forEach((sp, i) => {
+                                                                    const cx = sp.curbPt.x * scale + w / 2;
+                                                                    const cy = sp.curbPt.y * scale + d / 2;
+                                                                    swPathD += `${i === 0 ? 'M' : 'L'} ${cx} ${cy} `;
+                                                                    curbLineD += `${i === 0 ? 'M' : 'L'} ${cx} ${cy} `;
+                                                                });
+                                                                for (let i = run.length - 1; i >= 0; i--) {
+                                                                    const bx = run[i].backPt.x * scale + w / 2;
+                                                                    const by = run[i].backPt.y * scale + d / 2;
+                                                                    swPathD += `L ${bx} ${by} `;
+                                                                    outerBorderD += `${i === run.length - 1 ? 'M' : 'L'} ${bx} ${by} `;
+                                                                }
+                                                                swPathD += 'Z';
+
+                                                                impRoadPaths.push(
+                                                                    <g key={`imp-sw-${rp.id}-${sIdx}-${runIdx}`}>
+                                                                        <path d={swPathD} fill={`url(#${vSidewalkPatternId})`} stroke="none" />
+                                                                        <path
+                                                                            d={curbLineD}
+                                                                            fill="none"
+                                                                            stroke={isDarkMode ? 'rgba(203, 213, 225, 0.65)' : 'rgba(100, 116, 139, 0.72)'}
+                                                                            strokeWidth="1.5"
+                                                                        />
+                                                                        <path
+                                                                            d={outerBorderD}
+                                                                            fill="none"
+                                                                            stroke={isDarkMode ? 'rgba(148, 163, 184, 0.55)' : 'rgba(100, 116, 139, 0.55)'}
+                                                                            strokeWidth="1.1"
+                                                                            strokeDasharray="4,3"
+                                                                        />
+                                                                    </g>
+                                                                );
+
+                                                                // 沿人行道配置行道樹（與原始道路相同：平面樹穴方框 + 雙層樹冠 + 2.5D 立體樹，且嚴格排除所有基地 1.2m 內）
+                                                                const treeSpacingM = Math.min(13.5, Math.max(8.5, runLenM * 0.35));
+                                                                const treeEdgeMarginM = Math.min(6.0, runLenM * 0.14);
+                                                                for (let dM = runStartM + treeEdgeMarginM, tIdx = 0; dM <= runEndM - treeEdgeMarginM; dM += treeSpacingM, tIdx++) {
+                                                                    const { x, y, outUx, outUy } = sampleChainAtDist(ch, dM);
+                                                                    const curbCheckPt = { x: x + outUx * 0.2, y: y + outUy * 0.2 };
+                                                                    const tp = {
+                                                                        x: x + outUx * treeCurbOffsetM,
+                                                                        y: y + outUy * treeCurbOffsetM,
+                                                                        scaleFactor: 0.92 + ((tIdx + sIdx) % 3) * 0.08,
+                                                                        shapeType: (tIdx + sIdx * 2 + rIdx) % 3,
+                                                                        colorTier: (tIdx * 2 + sIdx + rIdx) % 3
+                                                                    };
+                                                                    if (isPointInsideAnySite(tp, 1.2) || isPointInsideAnySite(curbCheckPt, 0.8)) continue;
+
+                                                                    impStreetTrees.push(tp);
+                                                                    const cx = tp.x * scale + w / 2;
+                                                                    const cy = tp.y * scale + d / 2;
+                                                                    const r = treePlanR * tp.scaleFactor;
+                                                                    const tier = planTreeTiers[tp.colorTier % 3];
+                                                                    impRoadPaths.push(
+                                                                        <g key={`imp-road-tree-icon-${rp.id}-${sIdx}-${runIdx}-${tIdx}`}>
+                                                                            <rect
+                                                                                x={cx - pitHalf}
+                                                                                y={cy - pitHalf}
+                                                                                width={pitHalf * 2}
+                                                                                height={pitHalf * 2}
+                                                                                rx="1.5"
+                                                                                fill={isDarkMode ? 'rgba(30, 41, 59, 0.72)' : 'rgba(120, 113, 108, 0.28)'}
+                                                                                stroke={isDarkMode ? 'rgba(148, 163, 184, 0.55)' : 'rgba(87, 83, 78, 0.52)'}
+                                                                                strokeWidth="0.9"
+                                                                            />
+                                                                            <circle cx={cx} cy={cy} r={r} fill={tier.outerFill} stroke={tier.outerStroke} strokeWidth="1.2" />
+                                                                            <circle cx={cx} cy={cy} r={r * 0.62} fill={tier.innerFill} stroke={tier.innerStroke} strokeWidth="0.8" strokeDasharray="2,1.5" />
+                                                                            <line x1={cx - r * 0.55} y1={cy - r * 0.55} x2={cx + r * 0.55} y2={cy + r * 0.55} stroke={tier.innerStroke} strokeWidth="0.8" />
+                                                                            <line x1={cx + r * 0.55} y1={cy - r * 0.55} x2={cx - r * 0.55} y2={cy + r * 0.55} stroke={tier.innerStroke} strokeWidth="0.8" />
+                                                                            <circle cx={cx} cy={cy} r={Math.max(1.2, r * 0.16)} fill={tier.dot} />
+                                                                        </g>
+                                                                    );
+                                                                }
+                                                            });
+                                                        });
+
+                                                        // 7. 永遠正向可讀之道路名稱與路寬標籤（與編輯面板 inputs.roads 即時同步）
+                                                        let lblAngle = Math.atan2(labelTan.y, labelTan.x) * (180 / Math.PI);
+                                                        const totalScreenAngle = (((lblAngle + siteWorldRotDeg) % 360) + 360) % 360;
+                                                        if (totalScreenAngle > 90 && totalScreenAngle < 270) lblAngle += 180;
+                                                        const syncedRoad = siteRoadsList[rIdx];
+                                                        const roadName = syncedRoad?.name || rp.label || '主要道路';
+                                                        const roadWVal = syncedRoad?.width ? parseFloat(syncedRoad.width) : (rp.widthM || Math.round(avgRoadWidthM));
+                                                        const lblText = `${roadName} ${roadWVal}m`;
+                                                        const boxW = Math.max(64, lblText.length * 9 + 14);
+                                                        impSvgLabels.push(
+                                                            <g key={`imp-lbl-${rp.id}`} transform={`translate(${w / 2 + labelPos.x * scale}, ${d / 2 + labelPos.y * scale}) rotate(${lblAngle})`}>
+                                                                <rect x={-boxW / 2} y="-9" width={boxW} height="18" rx="3" fill={isDarkMode ? 'rgba(15, 23, 42, 0.82)' : 'rgba(255, 255, 255, 0.88)'} stroke={isDarkMode ? '#475569' : '#64748b'} strokeWidth="1" />
+                                                                <text x="0" y="1" textAnchor="middle" dominantBaseline="middle" fontSize="10" fontWeight="800" fill={isDarkMode ? '#e2e8f0' : '#334155'} className="select-none">
+                                                                    {lblText}
+                                                                </text>
+                                                            </g>
+                                                        );
+                                                    });
+
+                                                    return (
+                                                        <React.Fragment>
+                                                            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}>
+                                                                <svg width="100%" height="100%" viewBox={`0 0 ${w} ${d}`} style={{ overflow: 'visible' }}>
+                                                                    <defs>
+                                                                        <pattern id={vSidewalkPatternId} x="0" y="0" width={vTileSize} height={vTileSize} patternUnits="userSpaceOnUse">
+                                                                            <rect width={vTileSize} height={vTileSize} fill={aoMode ? (isNightAO ? '#242830' : '#e3e6eb') : (isDarkMode ? '#293548' : '#dce4ee')} />
+                                                                            <path d={`M ${vTileSize} 0 L 0 0 0 ${vTileSize}`} fill="none" stroke={aoMode ? (isNightAO ? 'rgba(148, 163, 184, 0.14)' : 'rgba(148, 163, 184, 0.35)') : (isDarkMode ? 'rgba(203, 213, 225, 0.28)' : 'rgba(148, 163, 184, 0.48)')} strokeWidth="0.9" />
+                                                                        </pattern>
+                                                                    </defs>
+                                                                    {impRoadPaths}
+                                                                    {impSvgLabels}
+                                                                </svg>
+                                                            </div>
+                                                            <StreetTrees3D trees={impStreetTrees} scale={scale} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} aoMode={aoMode} aoNight={isNightAO} />
+                                                            <Pedestrians3D paths={impWalkPaths} scale={scale} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} aoMode={aoMode} aoNight={isNightAO} />
+                                                            <RoadVehicles3D lanes={impVehicleLanes} scale={scale} w={w} d={d} isDarkMode={isDarkMode} rotationZ={siteWorldRotDeg} viewAngleX={viewAngleX} aoMode={aoMode} aoNight={isNightAO} />
+                                                        </React.Fragment>
+                                                    );
+                                                })() : renderRoads(ps)}
+                                                {renderReviewSurfaces(ps)}
+                                                {renderPolygonSetbacks(ps)}
+
+                                                {/* 白模 AO 地面方向性投影陰影與接觸光暈 */}
+                                                {aoMode && (
+                                                    <AOGroundShadows
+                                                        layers={ps.massing.layers}
+                                                        sunState={sunState}
+                                                        scale={scale}
+                                                        w={w}
+                                                        d={d}
+                                                        siteId={ps.site.id}
+                                                    />
+                                                )}
+
+                                                {/* 3D 太陽軌跡弧線（任務 6：預設隱藏，僅在環境分頁或桌機日照面板開啟時顯示） */}
+                                                {(isMobileLayout ? (mobileActiveTab === 'env' && (isCompactLandscape || mobileSheetHeight !== 'peek')) : sunPathOpen) && isPrimary && (
+                                                    <SunPathArc3D
+                                                        sunState={sunState}
+                                                        season={sunSeason}
+                                                        northAngle={inputs.northAngle || 0}
+                                                        scale={scale}
+                                                        w={w}
+                                                        d={d}
+                                                        radiusM={Math.max(20, Math.max(ps.wM || 18, ps.dM || 18) * 1.3)}
+                                                    />
+                                                )}
+
+                                                {/* 3D 場景內嵌式平面/樓層多邊形與點拉線互動繪製層 */}
+                                                {isPrimary && (
+                                                    <InScenePolygonPlane
+                                                        controller={unifiedController}
+                                                        w={w}
+                                                        d={d}
+                                                        scale={scale}
+                                                        isDarkMode={isDarkMode}
+                                                        screenToSiteLocal={screenToSiteLocal}
+                                                    />
+                                                )}
                                                     
                                                     {/* Render Adjacent Lands (獨立向外偏移並貼合弧形基地/道路，絕不與基地重疊) */}
                                                     {adjacentLandEnabled && (ps.site.adjacentLandGroups || []).some(g => {
@@ -4743,7 +6429,7 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                                                                                 <text x={w / 2 + parcelCenter.x * scale} y={d / 2 + parcelCenter.y * scale} textAnchor="middle" fontSize="10" fill="#a855f7" fontWeight="bold" opacity="0.85">臨地 {gIdx + 1}</text>
                                                                             )}
                                                                         </svg>
-                                                                        <BuildingLayer points={bldgPts} height={totalH * scale} x={0} y={0} z={0} rotation={0} scale={scale} color={isDarkMode ? 'rgba(168,85,247,0.16)' : 'rgba(168,85,247,0.12)'} strokeColor="#a855f7" showFrame={true} opacity={0.45} visible={true} isSlabMode={false} isDarkMode={isDarkMode} isViolation={false} />
+                                                                        <BuildingLayer points={bldgPts} height={totalH * scale} x={0} y={0} z={0} rotation={0} scale={scale} color={isDarkMode ? 'rgba(168,85,247,0.16)' : 'rgba(168,85,247,0.12)'} strokeColor="#a855f7" showFrame={true} opacity={0.45} visible={true} isSlabMode={false} isDarkMode={isDarkMode} isViolation={false} aoMode={aoMode} aoNight={isNightAO} sunVec={sunState.sunVec} isContextMassing={true} />
                                                                     </React.Fragment>
                                                                 );
                                                             });
@@ -4757,26 +6443,54 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                                                         <CheckLine key={line.id} {...line} baseRotation={baseRotDeg} viewAngleX={viewAngleX} rotationZ={rotationZ} visible={true} dashed={line.dashed} thick={line.thick} isDarkMode={isDarkMode} labelPosRatio={0.25} />
                                                     ))}
 
-                                                    {/* Render Massing Layers (支援選中樓層亮顯、其餘樓層黯淡顯示) */}
+                                                    {/* Render Massing Layers (支援選中樓層亮顯、其餘樓層與點拉線/地面編輯時自動半透明穿透) */}
                                                     {(() => {
+                                                        const isGroundEditing = Boolean(
+                                                            isPrimary && (
+                                                                unifiedController.isDrawingSite ||
+                                                                (selectedFloor && (selectedFloor.id === 'base' || selectedFloor.id === 'excavation' || /^B\d+$/.test(selectedFloor.id)))
+                                                            )
+                                                        );
                                                         const hasFloorFocus = Boolean(
                                                             selectedFloor &&
                                                             selectedFloor.id &&
                                                             selectedFloor.id !== 'base' &&
-                                                            selectedFloor.id !== 'excavation'
+                                                            selectedFloor.id !== 'excavation' &&
+                                                            !/^B\d+$/.test(selectedFloor.id)
                                                         );
+                                                        const disable3DBoxHit = Boolean(isPrimary && (unifiedController.isDrawingSite || selectedFloor));
+                                                        const isTopDownView = viewAngleX <= 5;
+                                                        const selectedFloorMatch = hasFloorFocus && selectedFloor?.id
+                                                            ? String(selectedFloor.id).match(/^(\d+)F/)
+                                                            : null;
+                                                        const selectedFloorNum = selectedFloorMatch ? parseInt(selectedFloorMatch[1], 10) : null;
+
                                                         return ps.massing.layers.map((layer) => {
                                                             const baseLayerId = (layer.id && layer.id.includes('-')) ? layer.id.split('-')[0] : layer.id;
                                                             const isLayerSelected = isPrimary && hasFloorFocus && (
                                                                 selectedFloor.id === layer.id ||
                                                                 selectedFloor.id === baseLayerId
                                                             );
+                                                            const layerFloorMatch = baseLayerId ? String(baseLayerId).match(/^(\d+)F/) : null;
+                                                            const layerFloorNum = layerFloorMatch ? parseInt(layerFloorMatch[1], 10) : null;
+
+                                                            // 平面剖切：選中某樓層 kF 時，隱藏所有高於 kF 的上層樓板；在 2D 俯視編輯基地/開挖/地下室時隱藏地上樓板
+                                                            const isAboveCutPlane = Boolean(
+                                                                isPrimary && (
+                                                                    (selectedFloorNum !== null && layerFloorNum !== null && layerFloorNum > selectedFloorNum) ||
+                                                                    (isGroundEditing && isTopDownView)
+                                                                )
+                                                            );
 
                                                             let layerColor = isPrimary ? colors.floor : "rgba(148, 163, 184, 0.4)";
                                                             let layerStroke = isPrimary ? colors.stroke : "rgba(100, 116, 139, 0.5)";
                                                             let layerOpacity = layer.opacity || 1;
 
-                                                            if (hasFloorFocus) {
+                                                            if (isGroundEditing) {
+                                                                layerColor = isDarkMode ? "rgba(51, 65, 85, 0.12)" : "rgba(214, 211, 209, 0.15)";
+                                                                layerStroke = isDarkMode ? "rgba(100, 116, 139, 0.22)" : "rgba(168, 162, 158, 0.25)";
+                                                                layerOpacity = 0.16;
+                                                            } else if (hasFloorFocus) {
                                                                 if (isLayerSelected) {
                                                                     layerColor = isDarkMode ? "rgba(56, 189, 248, 0.85)" : "rgba(251, 146, 60, 0.82)";
                                                                     layerStroke = isDarkMode ? "#38bdf8" : "#ea580c";
@@ -4806,18 +6520,25 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                                                                     strokeColor={layerStroke} 
                                                                     showFrame={true} 
                                                                     opacity={layerOpacity}
-                                                                    visible={layer.visible !== false}
+                                                                    visible={layer.visible !== false && !isAboveCutPlane}
                                                                     isSelected={isLayerSelected}
                                                                     isSlabMode={false}
                                                                     isDarkMode={isDarkMode}
-                                                                    isViolation={layer.isViolation} 
+                                                                    isViolation={layer.isViolation}
+                                                                    interactive={!disable3DBoxHit}
+                                                                    aoMode={aoMode}
+                                                                    aoNight={isNightAO}
+                                                                    sunVec={sunState.sunVec}
+                                                                    isContextMassing={!isPrimary}
                                                                     onClick={(e) => isPrimary && handleLayerClick(e, layer)} 
                                                                 />
                                                             );
                                                         });
                                                     })()}
 
-                                                    {/* 3D-Anchored Site Label (Locked to Roof Center like CheckLine/Si - Never Drifts!) */}
+                                                    {/* 3D-Anchored Site Label（正在編輯樓層平面或繪製基地時暫時隱藏，避免擋在平面正中央） */}
+                                                    {!(isPrimary && (selectedFloor || unifiedController.isDrawingSite)) && (
+                                                    <>
                                                     <div
                                                         className="absolute origin-left pointer-events-none"
                                                         style={{
@@ -4844,6 +6565,8 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                                                             if (sIdx !== -1 && typeof setActiveSiteIndex === 'function') {
                                                                 setActiveSiteIndex(sIdx);
                                                             }
+                                                            setSelectedFloor({ id: 'base' });
+                                                            setFocusOffset({ x: 0, y: 0, z: 0 });
                                                         }}
                                                     >
                                                         <div
@@ -4861,6 +6584,8 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                                                             <span>{ps.site.name}</span>
                                                         </div>
                                                     </div>
+                                                    </>
+                                                    )}
                                                 </div>
                                             );
                                         })}
@@ -4947,13 +6672,12 @@ const Visualizer3D = ({ isDarkMode, setIsDarkMode, sites, activeSiteId, projectI
                                 </div>
                             </div>
                         </>
-                    )}
                 </div>
             </div>
 
-            {/* 專案摘要 Floating DraggablePanel */}
+            {/* 專案摘要浮動面板 */}
             {showSummaryPanel && (
-                <DraggablePanel title="專案摘要 / Project Summary" onClose={() => setShowSummaryPanel && setShowSummaryPanel(false)}>
+                <DraggablePanel title="專案摘要" onClose={() => setShowSummaryPanel && setShowSummaryPanel(false)}>
                     <div className="space-y-4 min-w-[280px]">
                         <div className="space-y-2">
                             <SummaryRow label="專案名稱" value={inputs.projectName || '未命名專案'} />

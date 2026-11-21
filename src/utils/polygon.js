@@ -243,14 +243,16 @@ export const getSegmentNormal = (p1, p2, centroid) => {
     let nx = -dy / len;
     let ny = dx / len;
 
-    const midX = (p1.x + p2.x) / 2;
-    const midY = (p1.y + p2.y) / 2;
-    const toCentroidX = centroid.x - midX;
-    const toCentroidY = centroid.y - midY;
+    if (centroid && centroid.x !== undefined && centroid.y !== undefined) {
+        const midX = (p1.x + p2.x) / 2;
+        const midY = (p1.y + p2.y) / 2;
+        const toCentroidX = centroid.x - midX;
+        const toCentroidY = centroid.y - midY;
 
-    if (nx * toCentroidX + ny * toCentroidY < 0) {
-        nx = -nx;
-        ny = -ny;
+        if (nx * toCentroidX + ny * toCentroidY < 0) {
+            nx = -nx;
+            ny = -ny;
+        }
     }
     return { x: nx, y: ny };
 };

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { ChevronUp, ChevronDown, AlertTriangle } from 'lucide-react';
+import { ChevronUp, ChevronDown, AlertTriangle, Scale } from 'lucide-react';
 import { formatNum, toPing } from '../utils/geometry';
+import { TAIWAN_REGULATIONS } from '../utils/taiwanRegulations';
+import { RegulationInlineRow } from './RegulationGuidePanel';
 
 export const Si = React.memo(({ text, x, y, z, rotationZ, baseRotation, viewAngleX, visible, className, lineConnector, isRoadLabel, zIndex = 7000, onClick }) => (
     visible ? (<div className={`absolute ${onClick ? 'pointer-events-auto cursor-pointer' : 'pointer-events-none'}`} onClick={onClick} style={{ left: 0, top: 0, transform: `translate3d(${x}px, ${y}px, ${z}px) rotateZ(${isRoadLabel ? -(rotationZ + baseRotation) : -(rotationZ + baseRotation)}deg) rotateX(${-viewAngleX}deg)`, zIndex }}><div className="flex items-center" style={{ transform: 'translate(-50%, -50%)' }}>{lineConnector && <div className="w-4 h-[1px] bg-stone-400"></div>}<div className={`whitespace-nowrap px-2 py-0.5 rounded-none  text-sm backdrop-blur-sm num-font border-2 border-black bg-white/90 font-black ${className}`}>{text}</div></div></div>) : null
@@ -26,33 +28,93 @@ export const CollapsibleSection = ({ title, icon, children, defaultOpen = true, 
     );
 };
 
-export const InputRow = ({ id, label, value, calculatedValue, formula, note, isEditMode, onOverride, highlight = false, subTotal = false, bold = false, paramKey, paramValue, onParamChange, isArea = true, unit = '' }) => {
+export const InputRow = ({
+    id,
+    label,
+    value,
+    calculatedValue,
+    formula,
+    note,
+    isEditMode,
+    onOverride,
+    highlight = false,
+    subTotal = false,
+    bold = false,
+    paramKey,
+    paramValue,
+    onParamChange,
+    isArea = true,
+    unit = '',
+    regKey,
+    showReg = false,
+    onToggleReg,
+    inputs,
+    res,
+    params
+}) => {
     const isConflict = isEditMode && calculatedValue !== undefined && Math.abs(value - calculatedValue) > 0.01;
     const displayValue = formatNum(value, isArea ? 0 : 2);
     const displayPing = isArea ? formatNum(toPing(value)) : (unit || '-');
-    return ( 
-        <tr className={`hover:bg-stone-50 transition-colors ${subTotal ? 'bg-stone-100 italic theme-text-muted' : ''}`}>
-            <td className={`p-2 @[480px]:p-3 @[680px]:p-4 pl-3 @[480px]:pl-5 border-l-4 @[480px]:border-l-8 text-xs @[480px]:text-sm break-words ${highlight ? 'border-[var(--text-accent)] font-black text-[var(--text-accent)] uppercase' : 'border-black font-bold'}`}>{label}</td>
-            <td className={`p-2 @[480px]:p-3 @[680px]:p-4 text-right whitespace-nowrap text-xs @[480px]:text-sm @[680px]:text-base ${highlight ? 'font-black text-[var(--text-accent)] @[480px]:text-lg' : ''} ${bold ? 'font-black' : ''}`}>
-                {isEditMode ? (
-                    <div className="flex items-center justify-end gap-1.5 relative">
-                        {isConflict && <div className="text-red-600 animate-pulse border border-red-600 p-0.5 shrink-0" title="警告：數據衝突"><AlertTriangle size={14} strokeWidth={3} /></div>}
-                        <input type="number" value={value} onChange={(e) => onOverride(id, e.target.value)} className={`w-20 @[480px]:w-28 p-1 @[480px]:p-1.5 text-right border-2 border-black rounded-none outline-none focus:border-[var(--text-accent)] focus:bg-white ${isConflict ? 'border-red-500 bg-red-50' : 'border-black theme-bg theme-text'} font-black text-xs @[480px]:text-sm num-font`} />
+    const resolvedRegKey = regKey || (TAIWAN_REGULATIONS[id] ? id : null);
+    const hasReg = Boolean(resolvedRegKey && TAIWAN_REGULATIONS[resolvedRegKey]);
+
+    return (
+        <>
+            <tr className={`hover:bg-stone-50 transition-colors ${subTotal ? 'bg-stone-100 italic theme-text-muted' : ''}`}>
+                <td className={`p-2 @[480px]:p-3 @[680px]:p-4 pl-3 @[480px]:pl-5 border-l-4 @[480px]:border-l-8 text-xs @[480px]:text-sm break-words ${highlight ? 'border-[var(--text-accent)] font-black text-[var(--text-accent)] uppercase' : 'border-black font-bold'}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <span>{label}</span>
+                        {hasReg && onToggleReg && (
+                            <button
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    onToggleReg(resolvedRegKey);
+                                }}
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-black border transition-colors shrink-0 ${
+                                    showReg
+                                        ? 'bg-amber-400 text-black border-black shadow-[1px_1px_0_#000]'
+                                        : 'bg-stone-100 text-stone-600 border-stone-300 hover:bg-stone-900 hover:text-amber-300 hover:border-black'
+                                }`}
+                                title={showReg ? '隱藏此項台灣建築法規說明' : '顯示此項台灣建築法規說明'}
+                            >
+                                <Scale size={10} />
+                                <span>法規</span>
+                            </button>
+                        )}
                     </div>
-                ) : (<span className="num-font font-black">{displayValue}</span>)}
-            </td>
-            <td className={`p-2 @[480px]:p-3 @[680px]:p-4 text-right whitespace-nowrap theme-text-muted text-xs @[480px]:text-sm @[680px]:text-base ${highlight ? 'font-black text-[var(--text-accent)]' : ''} ${bold ? 'font-black' : ''} num-font`}>{displayPing}</td>
-            {isEditMode && (
-                <>
-                    <td className="p-2 @[480px]:p-3 font-mono text-[10px] @[480px]:text-xs font-black bg-stone-50 border-l-2 border-black">
-                        {paramKey ? (
-                            <div className="flex items-center gap-1 flex-wrap"><span className="uppercase text-[10px]">{paramKey === 'exemptRate' ? '免計率' : paramKey === 'stairRate' ? '梯廳率' : '陽台率'}:</span><input type="number" value={paramValue} onChange={(e) => onParamChange(paramKey, e.target.value)} className="w-14 p-0.5 border-2 border-black rounded-none text-center font-black bg-white num-font text-xs" /><span>%</span></div>
-                        ) : formula}
-                    </td>
-                    <td className="p-2 @[480px]:p-3 text-[11px] @[480px]:text-xs font-bold text-stone-500 bg-stone-50">{note}</td>
-                </>
+                </td>
+                <td className={`p-2 @[480px]:p-3 @[680px]:p-4 text-right whitespace-nowrap text-xs @[480px]:text-sm @[680px]:text-base ${highlight ? 'font-black text-[var(--text-accent)] @[480px]:text-lg' : ''} ${bold ? 'font-black' : ''}`}>
+                    {isEditMode ? (
+                        <div className="flex items-center justify-end gap-1.5 relative">
+                            {isConflict && <div className="text-red-600 animate-pulse border border-red-600 p-0.5 shrink-0" title="警告：數據衝突"><AlertTriangle size={14} strokeWidth={3} /></div>}
+                            <input type="number" value={value} onChange={(e) => onOverride(id, e.target.value)} className={`w-20 @[480px]:w-28 p-1 @[480px]:p-1.5 text-right border-2 border-black rounded-none outline-none focus:border-[var(--text-accent)] focus:bg-white ${isConflict ? 'border-red-500 bg-red-50' : 'border-black theme-bg theme-text'} font-black text-xs @[480px]:text-sm num-font`} />
+                        </div>
+                    ) : (<span className="num-font font-black">{displayValue}</span>)}
+                </td>
+                <td className={`p-2 @[480px]:p-3 @[680px]:p-4 text-right whitespace-nowrap theme-text-muted text-xs @[480px]:text-sm @[680px]:text-base ${highlight ? 'font-black text-[var(--text-accent)]' : ''} ${bold ? 'font-black' : ''} num-font`}>{displayPing}</td>
+                {isEditMode && (
+                    <>
+                        <td className="p-2 @[480px]:p-3 font-mono text-[10px] @[480px]:text-xs font-black bg-stone-50 border-l-2 border-black">
+                            {paramKey ? (
+                                <div className="flex items-center gap-1 flex-wrap"><span className="uppercase text-[10px]">{paramKey === 'exemptRate' ? '免計率' : paramKey === 'stairRate' ? '梯廳率' : '陽台率'}:</span><input type="number" value={paramValue} onChange={(e) => onParamChange(paramKey, e.target.value)} className="w-14 p-0.5 border-2 border-black rounded-none text-center font-black bg-white num-font text-xs" /><span>%</span></div>
+                            ) : formula}
+                        </td>
+                        <td className="p-2 @[480px]:p-3 text-[11px] @[480px]:text-xs font-bold text-stone-500 bg-stone-50">{note}</td>
+                    </>
+                )}
+            </tr>
+            {hasReg && showReg && (
+                <RegulationInlineRow
+                    regKey={resolvedRegKey}
+                    inputs={inputs}
+                    res={res}
+                    params={params}
+                    colSpan={isEditMode ? 5 : 3}
+                    onCloseItem={onToggleReg ? () => onToggleReg(resolvedRegKey) : undefined}
+                />
             )}
-        </tr> 
+        </>
     );
 };
 

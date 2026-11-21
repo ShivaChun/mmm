@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Building2, MapPin, Plus, Trash2, FileText, Layers, ChevronUp, ChevronDown, AlertTriangle, Settings2, Pencil, Box, MapPinned, X } from 'lucide-react';
 import { useSiteAnalysis } from './hooks/useSiteAnalysis';
 import { useMultiSiteAnalysis } from './hooks/useMultiSiteAnalysis';
@@ -8,6 +8,16 @@ import Visualizer3D from './components/PlanAnalysis3D';
 import { ContextMenu } from './components/ContextMenu';
 import { DraggablePanel } from './components/DraggablePanel';
 import { CollapsibleSection, InputRow, SectionHeader } from './components/Si.jsx';
+import { ResultSummaryPanel } from './components/ResultSummaryPanel';
+import { SiteSettingsSheet } from './components/SiteSettingsSheet';
+import { ExportShareModal } from './components/ExportShareModal';
+import {
+    loadSavedProjects,
+    saveProjectSnapshot,
+    loadDesignerProfile,
+    saveDesignerProfile,
+    decodeSharePayloadFromHash
+} from './utils/projectStorage';
 
 const DEFAULT_INPUTS = { projectName: '', district: '南投縣中興新村', roads: [{ id: 1, name: '向陽路', width: 10, orientation: 'bottom', type: 'primary', edgeIndex: 2 }], zoneType: '住宅區', urbanPlanName: '中興新村都市計畫區', coverageRatio: 50, floorRatio: 150, excavationRatio: 60, floorsBelow: 1, avgCarArea: 35, frontYardDepth: 4, sideYardDepth: 1.5, sideYardDirection: 'right', backYardDepth: 3, floorHeight1F: 4.2, floorHeightOther: 3.6, baseWidth: '', incentiveArea: 0, transferArea: 0, minBackyardDepthRatio: 0, arcadeDepth: 0, floorsAbove: 4, northAngle: 0 };
 const SITE_LABELS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -16,9 +26,8 @@ const getSiteDimensionsAndLocalPts = (site) => {
     const pts = site?.baseGeometry?.points || site?.basePoints || null;
     const curves = site?.baseGeometry?.curves || site?.baseCurves || null;
     if (pts && pts.length > 2) {
-        const norm = normalizeWithCurves(pts, curves);
-        const normPts = norm.points || pts;
-        const normCurves = norm.curves || null;
+        const normPts = pts;
+        const normCurves = curves || null;
         const disc = discretizePolygon(normPts, normCurves, 16);
         const samplePts = disc?.points?.length > 2 ? disc.points : normPts;
         const xs = samplePts.map(p => p.x);
@@ -238,7 +247,7 @@ const checkPolygonOverlap = (polyA, polyB) => {
 const createDefaultSite = (name, id, isFirst = false) => ({
     id: id || Date.now(),
     name: name || '基地',
-    lots: [{ id: 1, lot: '___段___地號', area: 239.12 }],
+    lots: [{ id: 1, lot: '', area: 328.4 }],
     inputs: { ...DEFAULT_INPUTS, roads: isFirst ? DEFAULT_INPUTS.roads : [] },
     overrides: {},
     position: { x: 0, y: 0, rotation: 0 },
@@ -254,10 +263,11 @@ const Cal = () => {
     const [showAddSiteDialog, setShowAddSiteDialog] = useState(false);
     const [showCombinedTable, setShowCombinedTable] = useState(true);
 
-    // ── Placement Mode State ──
+    // ── Placement & Point-to-Point Draw Mode State ──
     const [placementMode, setPlacementMode] = useState(false); // false or 'independent'
     const [referenceEdge, setReferenceEdge] = useState(null);
     const [placementOffset, setPlacementOffset] = useState({ x: 0, y: 0 });
+    const [externalDrawSiteMode, setExternalDrawSiteMode] = useState(null); // null | 'current' | 'new'
 
     // Derived active-site accessors (so all existing handlers keep working)
     const activeSite = sites[activeSiteIndex] || sites[0];
@@ -275,12 +285,46 @@ const Cal = () => {
     const [showDetail, setShowDetail] = useState(true);
     const [showVisualizer, setShowVisualizer] = useState(true);
     const [showBasePanels, setShowBasePanels] = useState(true);
-    const [showCheckLines, setShowCheckLines] = useState(true);
+    // 預設關閉線框與紅色檢討面，呈現乾淨白模 + AO（可透過「檢討模式」一鍵切換）
+    const [showCheckLines, setShowCheckLines] = useState(false);
     const [showHeightRatio, setShowHeightRatio] = useState(true);
     const [showWeiLao, setShowWeiLao] = useState(false);
     const [showBackyard, setShowBackyard] = useState(true);
     const [isConstraintMode, setIsConstraintMode] = useState(false);
     const [isDarkMode, setIsDarkMode] = useState(false);
+
+    // ── 本機案件自動儲存、設計師資訊與唯讀分享狀態（任務 7） ──
+    const [currentProjectId, setCurrentProjectId] = useState(() => `proj-${Date.now()}`);
+    const [savedProjects, setSavedProjects] = useState(() => loadSavedProjects());
+    const [designer, setDesigner] = useState(() => loadDesignerProfile());
+    const [includeSunInReport, setIncludeSunInReport] = useState(true);
+    const [showExportModal, setShowExportModal] = useState(false);
+    const [isReadOnlyShare, setIsReadOnlyShare] = useState(false);
+
+    // 啟動時檢查是否為唯讀分享連結 (#share=...)；若否則載入最近一筆本機案件
+    useEffect(() => {
+        const shared = decodeSharePayloadFromHash();
+        if (shared && Array.isArray(shared.sites) && shared.sites.length > 0) {
+            setSites(shared.sites);
+            if (shared.params) setParams(shared.params);
+            if (shared.designer) setDesigner(shared.designer);
+            if (typeof shared.includeSunInReport === 'boolean') setIncludeSunInReport(shared.includeSunInReport);
+            setIsReadOnlyShare(true);
+            return;
+        }
+        const existing = loadSavedProjects();
+        if (existing.length > 0 && Array.isArray(existing[0].sites) && existing[0].sites.length > 0) {
+            setCurrentProjectId(existing[0].id);
+            setSites(existing[0].sites);
+            if (existing[0].params) setParams(existing[0].params);
+            setSavedProjects(existing);
+        }
+    }, []);
+
+    const handleUpdateDesigner = useCallback((nextProfile) => {
+        setDesigner(nextProfile);
+        saveDesignerProfile(nextProfile);
+    }, []);
 
     useEffect(() => {
         // 藍曬圖主題: 亮色為 'theme-blueprint', 暗色為 'theme-cyberpunk'
@@ -446,9 +490,89 @@ const Cal = () => {
         }
     };
 
+    // ── 點拉線直接繪製新基地完成處理 ──
+    const handleCreateDrawnSite = (worldPoints) => {
+        try {
+            if (!Array.isArray(worldPoints) || worldPoints.length < 3) return;
+            const newIdx = sites.length;
+            const label = SITE_LABELS[newIdx] || String(newIdx + 1);
+            const newSite = createDefaultSite(`基地 ${label}`, Date.now(), false);
+            const activeSiteRef = sites[activeSiteIndex] || sites[0];
+
+            const norm = normalizeWithCurves(worldPoints, null);
+            const localPts = norm.points || worldPoints;
+            const c = norm.centroid || { x: 0, y: 0 };
+            const position = { x: c.x, y: c.y, rotation: 0 };
+
+            const finalArea = calculatePolygonArea(localPts, null);
+            const xs = localPts.map(p => p.x);
+            const ys = localPts.map(p => p.y);
+            const finalW = Math.max(...xs) - Math.min(...xs);
+            const finalD = Math.max(...ys) - Math.min(...ys);
+
+            newSite.lots = [{ id: 1, lot: '___段___地號', area: parseFloat(finalArea.toFixed(2)) }];
+            newSite.inputs = {
+                ...activeSiteRef.inputs,
+                projectName: activeSiteRef.inputs.projectName || '',
+                baseWidth: parseFloat(finalW.toFixed(2)),
+                baseWidthM: parseFloat(finalW.toFixed(2)),
+                baseDepthM: parseFloat(finalD.toFixed(2)),
+                baseArea: parseFloat(finalArea.toFixed(2)),
+                roads: []
+            };
+            newSite.basePoints = localPts;
+            newSite.baseCurves = null;
+            newSite.baseGeometry = { points: localPts, curves: null };
+            newSite.position = position;
+
+            // 自動偵測新繪製基地是否緊鄰既有主要道路
+            const siteA = sites[0];
+            const roadPolysA = buildSiteRoadWorldPolygons(siteA, true);
+            if (roadPolysA.length > 0) {
+                const mainRoadPoly = roadPolysA.find(rp => rp.road.type === 'primary') || roadPolysA[0];
+                const chain = mainRoadPoly.innerWorldChain || mainRoadPoly.worldPoly || [];
+                let minEdgeDist = Infinity;
+                let bestEdgeIdx = 0;
+                for (let j = 0; j < worldPoints.length; j++) {
+                    const p1 = worldPoints[j];
+                    const p2 = worldPoints[(j + 1) % worldPoints.length];
+                    const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+                    for (let k = 0; k < chain.length - 1; k++) {
+                        const a = chain[k];
+                        const b = chain[k + 1];
+                        const l2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+                        const t = l2 > 1e-6 ? Math.max(0, Math.min(1, ((mid.x - a.x) * (b.x - a.x) + (mid.y - a.y) * (b.y - a.y)) / l2)) : 0;
+                        const proj = { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y) };
+                        const d = Math.hypot(mid.x - proj.x, mid.y - proj.y);
+                        if (d < minEdgeDist) {
+                            minEdgeDist = d;
+                            bestEdgeIdx = j;
+                        }
+                    }
+                }
+                const rw = parseFloat(mainRoadPoly.road?.width) || 6;
+                if (minEdgeDist <= rw + 3.0) {
+                    newSite.inputs.roads = [{ ...mainRoadPoly.road, edgeIndex: bestEdgeIdx, edgeIndices: [bestEdgeIdx] }];
+                }
+            }
+
+            setSites(prev => [...prev, newSite]);
+            setActiveSiteIndex(newIdx);
+            setShowAddSiteDialog(false);
+        } catch (err) {
+            console.error('Failed to create drawn site:', err);
+            alert('建立手繪基地發生錯誤: ' + err.message);
+        }
+    };
+
     // ── Site Management ──
     const handleAddSite = (snapDir) => {
         try {
+            if (snapDir === 'draw') {
+                setExternalDrawSiteMode('new');
+                setShowAddSiteDialog(false);
+                return;
+            }
             if (snapDir === 'free') {
                 setPlacementMode('independent');
                 setReferenceEdge(null);
@@ -794,8 +918,18 @@ const Cal = () => {
     const handleInputChange = (e) => { const { name, value } = e.target; setInputs(prev => ({ ...prev, [name]: value })); };
     const handleOverride = (id, value) => { const val = parseFloat(value); if (!isNaN(val)) setOverrides(prev => ({ ...prev, [id]: val })); };
     const handleParamChange = (key, value) => { setParams(prev => ({ ...prev, [key]: parseFloat(value) || 0 })); };
-    const updateBaseDim = (key, val) => { setInputs(prev => ({ ...prev, [key]: val })); };
-    const handleUpdateInputs = (key, val) => { setInputs(prev => ({ ...prev, [key]: val })); };
+    const updateBaseDim = (key, val) => {
+        setInputs(prev => ({ ...prev, [key]: val }));
+        if (key === 'baseArea' && typeof val === 'number' && val > 0) {
+            setLots(prev => prev.length === 1 ? [{ ...prev[0], area: parseFloat(val.toFixed(2)) }] : prev);
+        }
+    };
+    const handleUpdateInputs = (key, val) => {
+        setInputs(prev => ({ ...prev, [key]: val }));
+        if (key === 'baseArea' && typeof val === 'number' && val > 0) {
+            setLots(prev => prev.length === 1 ? [{ ...prev[0], area: parseFloat(val.toFixed(2)) }] : prev);
+        }
+    };
     const handleUpdateSiteSetting = (id, key, val) => {
         setSites(prev => prev.map(site => {
             if (site.id !== id) return site;
@@ -831,6 +965,25 @@ const Cal = () => {
     const [activePanels, setActivePanels] = useState([]);
     const [showSummaryPanel, setShowSummaryPanel] = useState(false);
     const [showEnvPanel, setShowEnvPanel] = useState(false);
+    const [isMobileViewport, setIsMobileViewport] = useState(() => {
+        if (typeof window === 'undefined') return false;
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        return w < 768 || (w > h && h <= 500);
+    });
+    const [massingSummary, setMassingSummary] = useState({});
+    const [isCanvasEditing, setIsCanvasEditing] = useState(false);
+    const [desktopLayerDockOpen, setDesktopLayerDockOpen] = useState(false);
+
+    useEffect(() => {
+        const handleResize = () => {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            setIsMobileViewport(w < 768 || (w > h && h <= 500));
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     const togglePanel = useCallback((panelId) => {
         setActivePanels(prev => prev.includes(panelId) ? prev.filter(p => p !== panelId) : [...prev, panelId]);
@@ -839,22 +992,167 @@ const Cal = () => {
         setActivePanels(prev => prev.filter(p => p !== panelId));
     }, []);
 
+    const openPanel = useCallback((panelId) => {
+        setActivePanels(prev => (prev.includes(panelId) ? prev : [...prev, panelId]));
+    }, []);
+
+    // 自動儲存目前案件至本機 localStorage（非唯讀模式下）
+    useEffect(() => {
+        if (isReadOnlyShare) return;
+        const timer = setTimeout(() => {
+            const primary = sites[0];
+            const name = primary?.inputs?.projectName || primary?.name || '未命名案件';
+            const updatedList = saveProjectSnapshot({
+                id: currentProjectId,
+                name,
+                updatedAt: Date.now(),
+                basePing: toPing(finalRes.base || 0),
+                sites,
+                params
+            });
+            setSavedProjects(updatedList);
+        }, 800);
+        return () => clearTimeout(timer);
+    }, [sites, params, currentProjectId, finalRes.base, isReadOnlyShare]);
+
+    const handleLoadProject = useCallback((proj) => {
+        if (!proj || !Array.isArray(proj.sites) || proj.sites.length === 0) return;
+        setCurrentProjectId(proj.id);
+        setSites(proj.sites);
+        setActiveSiteIndex(0);
+        if (proj.params) setParams(proj.params);
+        setIsReadOnlyShare(false);
+    }, []);
+
+    const handleDuplicateAsPlanB = useCallback(() => {
+        const clonedSites = JSON.parse(JSON.stringify(sites));
+        const baseName = clonedSites[0]?.inputs?.projectName || clonedSites[0]?.name || '自地自建案';
+        const nextName = baseName.includes('方案 B') ? `${baseName} (複本)` : `${baseName}（方案 B）`;
+        if (clonedSites[0]) {
+            clonedSites[0].inputs = { ...clonedSites[0].inputs, projectName: nextName };
+        }
+        const newId = `proj-${Date.now()}`;
+        setCurrentProjectId(newId);
+        setSites(clonedSites);
+        setActiveSiteIndex(0);
+        setIsReadOnlyShare(false);
+        const updatedList = saveProjectSnapshot({
+            id: newId,
+            name: nextName,
+            updatedAt: Date.now(),
+            basePing: toPing(finalRes.base || 0),
+            sites: clonedSites,
+            params
+        });
+        setSavedProjects(updatedList);
+    }, [sites, params, finalRes.base]);
+
+    const handleLoadSampleCase = useCallback((sampleData) => {
+        if (!sampleData) return;
+        setSites(prev => prev.map((s, idx) => {
+            if (idx !== activeSiteIndex) return s;
+            const totalArea = (sampleData.lots || []).reduce((sum, l) => sum + (parseFloat(l.area) || 0), 0);
+            const side = Math.sqrt(totalArea || 239.12);
+            return {
+                ...s,
+                name: sampleData.name || s.name,
+                lots: sampleData.lots || s.lots,
+                inputs: {
+                    ...s.inputs,
+                    ...sampleData.inputs,
+                    baseArea: totalArea,
+                    baseWidth: parseFloat(side.toFixed(2)),
+                    baseWidthM: parseFloat(side.toFixed(2)),
+                    baseDepthM: parseFloat(side.toFixed(2))
+                },
+                basePoints: null,
+                baseCurves: null,
+                baseGeometry: { points: null, curves: null },
+                overrides: {}
+            };
+        }));
+    }, [activeSiteIndex]);
+
+    // 提供給手機單一浮層（UnifiedMobileSheet）與桌機工具列的動作整合物件
+    const appActions = useMemo(() => ({
+        sites,
+        activeSiteIndex,
+        activeSite,
+        finalRes,
+        params,
+        massingSummary,
+        includeSunInReport,
+        setIncludeSunInReport,
+        savedProjects,
+        currentProjectId,
+        isReadOnlyShare,
+        onInputChange: handleInputChange,
+        onUpdateLot: updateLot,
+        onAddLot: addLot,
+        onUpdateRoad: updateRoad,
+        onLoadSampleCase: handleLoadSampleCase,
+        onLoadProject: handleLoadProject,
+        onDuplicateAsPlanB: handleDuplicateAsPlanB,
+        onSwitchSite: (idx) => setActiveSiteIndex(idx),
+        onOpenAddSite: () => setShowAddSiteDialog(true),
+        onOpenPanel: openPanel,
+        onOpenExport: () => setShowExportModal(true),
+        onToggleEnvPanel: () => setShowEnvPanel(prev => !prev),
+        showCheckLines,
+        setShowCheckLines,
+        showHeightRatio,
+        setShowHeightRatio,
+        showWeiLao,
+        setShowWeiLao,
+        showBackyard,
+        setShowBackyard,
+        desktopLayerDockOpen,
+        onLayerDockOpenChange: setDesktopLayerDockOpen
+    }), [
+        sites, activeSiteIndex, activeSite, finalRes, params, massingSummary,
+        includeSunInReport, savedProjects, currentProjectId, isReadOnlyShare,
+        handleLoadSampleCase, handleLoadProject, handleDuplicateAsPlanB,
+        openPanel, showCheckLines, showHeightRatio, showWeiLao, showBackyard,
+        desktopLayerDockOpen
+    ]);
+
+    const touchStartPosRef = React.useRef({ x: 0, y: 0 });
+
     const handleContextMenu = useCallback((e) => {
-        if(e.target.closest('input') || e.target.closest('button')) return;
+        if (e.target.closest('input') || e.target.closest('button') || e.target.closest('[data-type]') || e.target.closest('.no-context-menu')) return;
         e.preventDefault();
         setContextMenuState({ x: e.clientX, y: e.clientY });
     }, []);
 
     const handleTouchStart = useCallback((e) => {
-        if (e.touches.length === 1 && !e.target.closest('input') && !e.target.closest('button')) {
+        if (e.touches.length === 1 && !e.target.closest('input') && !e.target.closest('button') && !e.target.closest('[data-type]') && !e.target.closest('.no-context-menu')) {
+            const tx = e.touches[0].clientX;
+            const ty = e.touches[0].clientY;
+            touchStartPosRef.current = { x: tx, y: ty };
+            if (touchTimer.current) clearTimeout(touchTimer.current);
             touchTimer.current = setTimeout(() => {
-                setContextMenuState({ x: e.touches[0].clientX, y: e.touches[0].clientY });
-            }, 700);
+                setContextMenuState({ x: tx, y: ty });
+            }, 650);
+        } else {
+            if (touchTimer.current) clearTimeout(touchTimer.current);
+        }
+    }, []);
+
+    const handleTouchMoveGlobal = useCallback((e) => {
+        if (!touchTimer.current || !e.touches || e.touches.length === 0) return;
+        const dx = e.touches[0].clientX - touchStartPosRef.current.x;
+        const dy = e.touches[0].clientY - touchStartPosRef.current.y;
+        if (Math.hypot(dx, dy) > 12) {
+            clearTimeout(touchTimer.current);
+            touchTimer.current = null;
         }
     }, []);
 
     const handleTouchEnd = useCallback(() => {
-        if (touchTimer.current) clearTimeout(touchTimer.current);
+        if (touchTimer.current) {
+            clearTimeout(touchTimer.current);
+            touchTimer.current = null;
+        }
     }, []);
 
     const handleContextMenuAction = useCallback((action) => {
@@ -868,6 +1166,8 @@ const Cal = () => {
         if (action === 'toggle_landscape') setIsLandscapeMode(prev => !prev);
         if (action === 'toggle_dark_mode') setIsDarkMode(prev => !prev);
         if (action === 'open_add_site') setShowAddSiteDialog(true);
+        if (action === 'draw_current_site') setExternalDrawSiteMode('current');
+        if (action === 'draw_new_site') setExternalDrawSiteMode('new');
         if (action === 'toggle_check_lines') setShowCheckLines(prev => !prev);
         if (action === 'toggle_height_ratio') setShowHeightRatio(prev => !prev);
         if (action === 'toggle_wei_lao') setShowWeiLao(prev => !prev);
@@ -891,11 +1191,11 @@ const Cal = () => {
     
     return (
         <div 
-            className={`fixed inset-0 w-screen h-screen overflow-hidden theme-bg theme-text selection:bg-[var(--text-accent)] selection:text-white ${isLandscapeMode ? "landscape-mode" : ""}`}
+            className="fixed inset-0 w-screen h-screen overflow-hidden theme-bg theme-text selection:bg-[var(--text-accent)] selection:text-white"
             onContextMenu={handleContextMenu}
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
-            onTouchMove={handleTouchEnd}
+            onTouchMove={handleTouchMoveGlobal}
         >
             {contextMenuState && (
                 <ContextMenu
@@ -946,6 +1246,9 @@ const Cal = () => {
                                     setIsConstraintMode={setIsConstraintMode}
                                     isLandscapeMode={isLandscapeMode}
                                     onUnusedAreaChange={setUnusedArea}
+                                    onMassingSummaryChange={setMassingSummary}
+                                    onEditStateChange={setIsCanvasEditing}
+                                    appActions={appActions}
                                     placementMode={placementMode}
                                     referenceEdge={referenceEdge}
                                     setReferenceEdge={setReferenceEdge}
@@ -958,8 +1261,77 @@ const Cal = () => {
                                     setShowSummaryPanel={setShowSummaryPanel}
                                     showEnvPanel={showEnvPanel}
                                     setShowEnvPanel={setShowEnvPanel}
+                                    onCreateDrawnSite={handleCreateDrawnSite}
+                                    externalDrawSiteMode={externalDrawSiteMode}
+                                    setExternalDrawSiteMode={setExternalDrawSiteMode}
                                 />
             </div>
+
+            {/* 唯讀分享連結橫幅（業主開啟 #share=... 時顯示） */}
+            {isReadOnlyShare && (
+                <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[115] max-w-[calc(100vw-24px)] no-print no-context-menu">
+                    <div className="yra-card rounded-full px-4 py-2 flex items-center gap-3 text-xs">
+                        <span className="font-black text-[#E85D2A] shrink-0">唯讀分享檢視</span>
+                        <span className="text-[var(--text-muted)] truncate">
+                            {[designer?.firm, designer?.name, designer?.contact].filter(Boolean).join(' · ') || '自地自建快速評估報告'}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setIsReadOnlyShare(false);
+                                if (window.location.hash.includes('share=')) {
+                                    window.history.replaceState(null, '', window.location.pathname);
+                                }
+                            }}
+                            className="px-2.5 py-1 rounded-full bg-[#171614] text-white text-[11px] font-bold shrink-0 hover:bg-[#E85D2A] transition-colors"
+                        >
+                            另存並編輯
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* 桌機／平板 (≥768px 且非矮橫向) 固定左側結果摘要面板；手機直向與橫向由 UnifiedMobileSheet 單一浮層整合呈現 */}
+            {!isMobileViewport && (
+                <ResultSummaryPanel
+                    activeSite={activeSite}
+                    sites={sites}
+                    activeSiteIndex={activeSiteIndex}
+                    onSwitchSite={(idx) => setActiveSiteIndex(idx)}
+                    inputs={inputs}
+                    finalRes={finalRes}
+                    params={params}
+                    massingSummary={massingSummary}
+                    isMobile={false}
+                    isDarkMode={isDarkMode}
+                    isHiddenForEdit={false}
+                    onOpenPanel={openPanel}
+                    onOpenExport={() => setShowExportModal(true)}
+                    onParamChange={handleParamChange}
+                    savedProjects={savedProjects}
+                    currentProjectId={currentProjectId}
+                    onLoadProject={handleLoadProject}
+                    onDuplicateAsPlanB={handleDuplicateAsPlanB}
+                    isReadOnlyShare={isReadOnlyShare}
+                    desktopTopOffset={desktopLayerDockOpen}
+                />
+            )}
+
+            {/* 輸出與分享彈窗（LINE 長圖 / 唯讀分享連結 / A4 PDF） */}
+            <ExportShareModal
+                isOpen={showExportModal}
+                onClose={() => setShowExportModal(false)}
+                sites={sites}
+                activeSite={activeSite}
+                inputs={inputs}
+                finalRes={finalRes}
+                params={params}
+                massingSummary={massingSummary}
+                designer={designer}
+                onUpdateDesigner={handleUpdateDesigner}
+                includeSunInReport={includeSunInReport}
+                onToggleIncludeSunInReport={setIncludeSunInReport}
+            />
             
                 {activePanels.includes('project') && (
                     <DraggablePanel title="專案設定" onClose={() => closePanel('project')} defaultSize={{ w: 520, h: 420 }}>
@@ -1006,11 +1378,13 @@ const Cal = () => {
                             <h3 className="text-2xl font-black mb-2 flex items-center gap-3"><MapPinned size={24} className="text-[var(--text-accent)]" /> 新增基地</h3>
                             <p className="text-sm text-stone-500 mb-6">是否緊貼 <span className="font-black text-black">{activeSite.name}</span>？</p>
                             <div className="space-y-3">
+                                <button onClick={() => handleAddSite('draw')} className="w-full p-4 border-4 border-black bg-emerald-50 font-black hover:bg-emerald-600 hover:text-white text-left flex items-center gap-3 transition-colors shadow-[4px_4px_0_#000]">✏️ 點拉線自由繪製新基地（於畫布直接拉線）</button>
+                                <div className="border-t-4 border-stone-200 my-2" />
                                 <button onClick={() => handleAddSite('back')} className="w-full p-4 border-4 border-black font-bold hover:bg-stone-100 text-left flex items-center gap-3 transition-colors">🔗 緊貼後方（背面）</button>
                                 <button onClick={() => handleAddSite('left')} className="w-full p-4 border-4 border-black font-bold hover:bg-stone-100 text-left flex items-center gap-3 transition-colors">🔗 緊貼左側</button>
                                 <button onClick={() => handleAddSite('right')} className="w-full p-4 border-4 border-black font-bold hover:bg-stone-100 text-left flex items-center gap-3 transition-colors">🔗 緊貼右側</button>
                                 <div className="border-t-4 border-stone-200 my-2" />
-                                <button onClick={() => handleAddSite('free')} className="w-full p-4 border-4 border-dashed border-stone-400 font-bold hover:bg-stone-50 text-left flex items-center gap-3 text-stone-600 transition-colors">📍 獨立放置（不緊貼）</button>
+                                <button onClick={() => handleAddSite('free')} className="w-full p-4 border-4 border-dashed border-stone-400 font-bold hover:bg-stone-50 text-left flex items-center gap-3 text-stone-600 transition-colors">📍 獨立放置（矩形預覽吸附）</button>
                             </div>
                         </div>
                     </div>
@@ -1099,7 +1473,27 @@ const Cal = () => {
                     </div>
                 )}
 
-                {activePanels.includes('info') && (
+                {/* 基地與法規設定：手機三步驟 Bottom Sheet，桌機固定右側停靠面板（任務 3） */}
+                <SiteSettingsSheet
+                    isOpen={activePanels.includes('info')}
+                    onClose={() => closePanel('info')}
+                    isMobile={isMobileViewport}
+                    isDarkMode={isDarkMode}
+                    activeSite={activeSite}
+                    lots={lots}
+                    inputs={inputs}
+                    totalBaseArea={totalBaseArea}
+                    onInputChange={handleInputChange}
+                    onUpdateLot={updateLot}
+                    onAddLot={addLot}
+                    onRemoveLot={removeLot}
+                    onUpdateRoad={updateRoad}
+                    onAddRoad={addRoad}
+                    onRemoveRoad={removeRoad}
+                    onLoadSampleCase={handleLoadSampleCase}
+                />
+
+                {false && activePanels.includes('info') && (
                     <DraggablePanel
                         title="基地與法規設定"
                         onClose={() => closePanel('info')}
@@ -1234,13 +1628,13 @@ const Cal = () => {
                                                 </div>
                                             </div>
                                             <div className="theme-panel p-3.5 @[480px]:p-4 bg-[var(--text-primary)] text-white shadow-[4px_4px_0_var(--text-accent)]">
-                                                <label className="text-[10px] @[480px]:text-xs font-black uppercase text-[var(--text-accent)] mb-1.5 block">允建總樓地板面積 (Total CFA)</label>
+                                                <label className="text-[10px] @[480px]:text-xs font-black text-[var(--text-accent)] mb-1.5 block">概估允建總樓地板面積（非正式審查）</label>
                                                 <div className="text-xl @[480px]:text-2xl @[680px]:text-3xl font-black text-right border-b-2 border-[var(--text-accent)] pb-1.5 flex justify-between items-baseline gap-2">
-                                                    <span className="text-[10px] font-bold text-white/50">SQM</span>
-                                                    <span className="truncate">{formatNum(finalRes.totalCFA)}</span>
+                                                    <span className="text-[10px] font-bold text-white/60">平方公尺</span>
+                                                    <span className="truncate">{formatNum(finalRes.totalCFA)} ㎡</span>
                                                 </div>
                                                 <div className="text-sm @[480px]:text-base @[680px]:text-lg font-black text-right mt-1.5 text-[var(--text-accent)] flex justify-between items-baseline gap-2">
-                                                    <span className="text-[10px] font-bold text-white/50 uppercase">Pings</span>
+                                                    <span className="text-[10px] font-bold text-white/60">坪數</span>
                                                     <span className="truncate">{formatNum(toPing(finalRes.totalCFA))} 坪</span>
                                                 </div>
                                             </div>
@@ -1429,12 +1823,12 @@ const Cal = () => {
                                                     <td className="p-2.5 @[480px]:p-3 text-right font-black text-xs" colSpan={2}>
                                                         <div className="flex flex-wrap gap-2 justify-end items-center">
                                                             <div className="flex items-center gap-1">
-                                                                <span className="text-[10px] font-black text-[var(--text-accent)] uppercase">1F:</span>
+                                                                <span className="text-[10px] font-black text-[var(--text-accent)]">一樓:</span>
                                                                 <input type="number" name="floorHeight1F" value={inputs.floorHeight1F} onChange={handleInputChange} className="w-14 @[480px]:w-16 p-1 text-right border-2 border-black rounded-none theme-bg theme-text focus:border-[var(--text-accent)] outline-none" />
                                                                 <span className="text-[10px] theme-text-muted">m</span>
                                                             </div>
                                                             <div className="flex items-center gap-1">
-                                                                <span className="text-[10px] font-black text-[var(--text-accent)] uppercase">Other:</span>
+                                                                <span className="text-[10px] font-black text-[var(--text-accent)]">標準層:</span>
                                                                 <input type="number" name="floorHeightOther" value={inputs.floorHeightOther} onChange={handleInputChange} className="w-14 @[480px]:w-16 p-1 text-right border-2 border-black rounded-none theme-bg theme-text focus:border-[var(--text-accent)] outline-none" />
                                                                 <span className="text-[10px] theme-text-muted">m</span>
                                                             </div>
